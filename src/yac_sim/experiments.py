@@ -26,7 +26,7 @@ def apply_plot_style():
             "legend.framealpha": 0.9,
             "grid.alpha": 0.3,
             "lines.linewidth": 2.0,
-            "lines.markersize": 6,
+            "lines.markersize": 7,
         }
     )
 
@@ -84,7 +84,7 @@ def run_experiments(output_dir: Path):
     apply_plot_style()
     base = SimConfig()
 
-    delta_list = np.logspace(-2, 0.5, num=9)
+    delta_list = np.array([1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1.0, 3.0, 10.0])
     pareto_rows = []
     pareto_runs = []
     for delta in delta_list:
@@ -110,19 +110,35 @@ def run_experiments(output_dir: Path):
     df_pareto_runs.to_csv(output_dir / "exp_pareto_tradeoff_runs.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.errorbar(
-        df_pareto["N_tx_mean"],
-        df_pareto["J_mean"],
-        yerr=df_pareto["J_std"],
-        fmt="o-",
-        capsize=3,
-        label="Event-triggered",
+    df_plot = df_pareto.sort_values("N_tx_mean")
+    x_vals = df_plot["N_tx_mean"].to_numpy()
+    y_vals = df_plot["J_mean"].to_numpy()
+    color = "tab:blue"
+    ax.plot(
+        x_vals,
+        y_vals,
+        linestyle="-",
+        marker="o",
+        color=color,
+        markerfacecolor=color,
+        markeredgecolor=color,
     )
-    ax.set_xlabel("Average delivered updates")
-    ax.set_ylabel("Quadratic cost J")
-    ax.set_title("Performance--communication trade-off")
-    ax.legend()
-    ax.grid(True)
+    ax.set_xlabel("Communication usage: Number of updates N_tx")
+    ax.set_ylabel("Control performance: Quadratic cost J")
+    if y_vals.max() / max(y_vals.min(), 1e-9) > 10.0:
+        ax.set_yscale("log")
+    ax.grid(True, linestyle="--", linewidth=0.6, color="0.8")
+    mid_idx = len(x_vals) // 2
+    ax.annotate(
+        "Balanced operating point",
+        xy=(x_vals[mid_idx], y_vals[mid_idx]),
+        xytext=(10, 12),
+        textcoords="offset points",
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        arrowprops=dict(arrowstyle="->", color="0.3", lw=0.8),
+    )
     save_figure(fig, output_dir / "fig_pareto_tradeoff.png")
 
     grouped = df_pareto_runs.groupby("delta", as_index=False)
