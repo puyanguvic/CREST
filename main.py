@@ -2,7 +2,7 @@ import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from scipy.linalg import solve_discrete_are
 
 # -----------------------------
@@ -146,8 +146,8 @@ class SimConfig:
     delta: float = 0.5
 
     # LQR
-    Q: np.ndarray = np.diag([10.0, 1.0, 10.0, 1.0])
-    R: np.ndarray = np.diag([0.1, 0.1])
+    Q: np.ndarray = field(default_factory=lambda: np.diag([10.0, 1.0, 10.0, 1.0]))
+    R: np.ndarray = field(default_factory=lambda: np.diag([0.1, 0.1]))
     u_max: float = 2.0
 
     # channel (Gilbert-Elliott)
