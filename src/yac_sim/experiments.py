@@ -36,6 +36,21 @@ def save_figure(fig, path: Path):
     fig.savefig(path, bbox_inches="tight")
 
 
+def pareto_front(x_vals: np.ndarray, y_vals: np.ndarray) -> np.ndarray:
+    order = np.argsort(x_vals)
+    x_sorted = x_vals[order]
+    y_sorted = y_vals[order]
+    keep = []
+    best_y = np.inf
+    for x, y in zip(x_sorted, y_sorted):
+        if y < best_y:
+            keep.append((x, y))
+            best_y = y
+    if not keep:
+        return np.empty((0, 2))
+    return np.array(keep)
+
+
 def monte_carlo_single(cfg: SimConfig, policy: str, runs: int = 30, **kwargs):
     stats = []
     for i in range(runs):
@@ -63,14 +78,18 @@ def monte_carlo_single(cfg: SimConfig, policy: str, runs: int = 30, **kwargs):
 
 def run_experiments(output_dir: Path):
     output_dir.mkdir(parents=True, exist_ok=True)
+    for path in output_dir.iterdir():
+        if path.is_file():
+            path.unlink()
     apply_plot_style()
     base = SimConfig()
 
     delta_list = np.logspace(-2, 0.5, num=9)
     pareto_rows = []
+    pareto_runs = []
     for delta in delta_list:
         cfg = SimConfig(**{**base.__dict__, "delta": delta})
-        _, summ = monte_carlo_single(cfg, "event", runs=30)
+        df_runs, summ = monte_carlo_single(cfg, "event", runs=30)
         pareto_rows.append(
             {
                 "delta": delta,
@@ -82,8 +101,13 @@ def run_experiments(output_dir: Path):
                 "bits_mean": summ["bits_mean"],
             }
         )
+        df_runs = df_runs.copy()
+        df_runs["delta"] = delta
+        pareto_runs.append(df_runs)
     df_pareto = pd.DataFrame(pareto_rows)
     df_pareto.to_csv(output_dir / "exp_pareto_tradeoff.csv", index=False)
+    df_pareto_runs = pd.concat(pareto_runs, ignore_index=True)
+    df_pareto_runs.to_csv(output_dir / "exp_pareto_tradeoff_runs.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.errorbar(
@@ -100,6 +124,29 @@ def run_experiments(output_dir: Path):
     ax.legend()
     ax.grid(True)
     save_figure(fig, output_dir / "fig_pareto_tradeoff.png")
+
+    grouped = df_pareto_runs.groupby("delta", as_index=False)
+    q = grouped.agg(
+        J_q25=("J_cost", lambda s: np.quantile(s, 0.25)),
+        J_med=("J_cost", "median"),
+        J_q75=("J_cost", lambda s: np.quantile(s, 0.75)),
+        bits_q25=("bits_used", lambda s: np.quantile(s, 0.25)),
+        bits_med=("bits_used", "median"),
+        bits_q75=("bits_used", lambda s: np.quantile(s, 0.75)),
+    )
+    fig, axes = plt.subplots(2, 1, figsize=(7, 6.5), sharex=True)
+    axes[0].fill_between(q["delta"], q["J_q25"], q["J_q75"], alpha=0.2)
+    axes[0].plot(q["delta"], q["J_med"], marker="o")
+    axes[0].set_ylabel("Quadratic cost J")
+    axes[0].set_title("Event-triggered quantile bands (IQR)")
+    axes[0].grid(True)
+    axes[1].fill_between(q["delta"], q["bits_q25"], q["bits_q75"], alpha=0.2, color="tab:orange")
+    axes[1].plot(q["delta"], q["bits_med"], marker="o", color="tab:orange")
+    axes[1].set_xlabel("Event-trigger threshold delta")
+    axes[1].set_ylabel("Bits used (total)")
+    axes[1].grid(True)
+    axes[1].set_xscale("log")
+    save_figure(fig, output_dir / "fig_quantile_band.png")
 
     time_delta_list = [
         float(delta_list[0]),
@@ -347,12 +394,16 @@ def run_experiments(output_dir: Path):
     random_q = min(1.0, max(0.01, target_updates / cfg_event.T_steps))
 
     base_rows = []
+    base_runs = []
     for policy, kwargs in [
         ("event", {}),
         ("periodic", {"periodic_M": periodic_M}),
         ("random", {"random_q": random_q}),
     ]:
-        _, s = monte_carlo_single(cfg_event, policy, runs=30, **kwargs)
+        df_runs, s = monte_carlo_single(cfg_event, policy, runs=30, **kwargs)
+        df_runs = df_runs.copy()
+        df_runs["policy"] = policy
+        base_runs.append(df_runs)
         base_rows.append(
             {
                 "policy": policy,
@@ -364,6 +415,8 @@ def run_experiments(output_dir: Path):
         )
     df_base = pd.DataFrame(base_rows)
     df_base.to_csv(output_dir / "exp_single_uav_baselines.csv", index=False)
+    df_runs = pd.concat(base_runs, ignore_index=True)
+    df_runs.to_csv(output_dir / "exp_single_uav_baseline_runs.csv", index=False)
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True)
     labels = df_base["policy"].str.capitalize()
@@ -382,6 +435,63 @@ def run_experiments(output_dir: Path):
         ax.set_xticklabels(labels)
         ax.grid(axis="y")
     save_figure(fig, output_dir / "fig_single_uav_baselines.png")
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=False)
+    policies = ["event", "periodic", "random"]
+    labels = [p.capitalize() for p in policies]
+    data_J = [df_runs.loc[df_runs["policy"] == p, "J_cost"] for p in policies]
+    data_rms = [df_runs.loc[df_runs["policy"] == p, "rms_err"] for p in policies]
+    data_bits = [df_runs.loc[df_runs["policy"] == p, "bits_used"] for p in policies]
+    axes[0].boxplot(data_J, labels=labels, patch_artist=True)
+    axes[0].set_ylabel("Quadratic cost J")
+    axes[0].set_title("Distribution of J")
+    axes[1].boxplot(data_rms, labels=labels, patch_artist=True)
+    axes[1].set_ylabel("RMS tracking error (m)")
+    axes[1].set_title("Distribution of RMS")
+    axes[2].boxplot(data_bits, labels=labels, patch_artist=True)
+    axes[2].set_ylabel("Bits used (total)")
+    axes[2].set_title("Distribution of bits")
+    for ax in axes:
+        ax.grid(axis="y")
+    save_figure(fig, output_dir / "fig_single_uav_boxplot.png")
+
+    fig, ax = plt.subplots(figsize=(7, 4.8))
+    for policy, marker in [("event", "o"), ("periodic", "s"), ("random", "^")]:
+        sub = df_runs[df_runs["policy"] == policy]
+        ax.scatter(
+            sub["bits_used"],
+            sub["J_cost"],
+            alpha=0.6,
+            label=policy.capitalize(),
+            marker=marker,
+        )
+        front = pareto_front(sub["bits_used"].values, sub["J_cost"].values)
+        if len(front) > 0:
+            ax.plot(front[:, 0], front[:, 1], linewidth=2)
+    ax.set_xlabel("Bits used (total)")
+    ax.set_ylabel("Quadratic cost J")
+    ax.set_title("Cost vs communication (per-run scatter)")
+    ax.grid(True)
+    ax.legend()
+    save_figure(fig, output_dir / "fig_single_uav_scatter.png")
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    for policy in ["event", "periodic", "random"]:
+        sub = df_runs[df_runs["policy"] == policy]
+        for ax, col, title in [
+            (axes[0], "J_cost", "CDF of J"),
+            (axes[1], "rms_err", "CDF of RMS"),
+        ]:
+            vals = np.sort(sub[col].values)
+            cdf = np.arange(1, len(vals) + 1) / len(vals)
+            ax.plot(vals, cdf, label=policy.capitalize())
+            ax.set_title(title)
+            ax.grid(True)
+    axes[0].set_xlabel("Quadratic cost J")
+    axes[1].set_xlabel("RMS tracking error (m)")
+    axes[0].set_ylabel("CDF")
+    axes[0].legend()
+    save_figure(fig, output_dir / "fig_single_uav_cdf.png")
 
     metrics = [
         ("J_mean", "J (lower better)"),
@@ -455,6 +565,6 @@ def run_experiments(output_dir: Path):
 
     print(
         "Saved figures & CSVs:",
-        "fig_pareto_tradeoff.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.png, fig_single_uav_baselines.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
-        "exp_pareto_tradeoff.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_single_uav_baselines.csv, exp_sensitivity_heatmap.csv",
+        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.png, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
+        "exp_pareto_tradeoff.csv, exp_pareto_tradeoff_runs.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_single_uav_baselines.csv, exp_single_uav_baseline_runs.csv, exp_sensitivity_heatmap.csv",
     )
