@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 
 from .config import SimConfig
-from .sim_multi import simulate_two_uav
 from .sim_single import simulate_single_uav
 
 
@@ -59,26 +58,6 @@ def monte_carlo_single(cfg: SimConfig, policy: str, runs: int = 30, **kwargs):
         "energy_mean": df["energy"].mean(),
         "fail_rate": df["failed"].mean(),
         "avg_qerr": df["avg_qerr"].mean(),
-    }
-
-
-def monte_carlo_two(cfg: SimConfig, base_policy: str, runs: int = 30):
-    stats = []
-    for i in range(runs):
-        c = SimConfig(**{**cfg.__dict__, "seed": cfg.seed + i})
-        _, s = simulate_two_uav(c, base_policy=base_policy)
-        stats.append(s)
-    df = pd.DataFrame(stats)
-    return df, {
-        "rms_avg_mean": df["rms_err_avg"].mean(),
-        "rms_avg_std": df["rms_err_avg"].std(),
-        "bits_mean": df["bits_used"].mean(),
-        "bits_std": df["bits_used"].std(),
-        "tx_meas_mean": df["N_tx_meas"].mean(),
-        "tx_meas_std": df["N_tx_meas"].std(),
-        "tx_share_mean": df["N_tx_share"].mean(),
-        "tx_share_std": df["N_tx_share"].std(),
-        "fail_rate": df["failed"].mean(),
     }
 
 
@@ -360,68 +339,122 @@ def run_experiments(output_dir: Path):
     axes[0].legend(ncol=2, fontsize=9)
     save_figure(fig, output_dir / "fig_periodic_comparison.png")
 
-    base2 = SimConfig(**{**base.__dict__, "multi_uav": True, "bit_budget_total": base.bit_budget_total})
-    base_policies = ["event", "periodic", "random"]
-    comp_rows = []
-    for policy in base_policies:
-        cfg_noshare = SimConfig(**{**base2.__dict__, "share_pose": False, "base_policy": policy})
-        _, s_noshare = monte_carlo_two(cfg_noshare, base_policy=policy, runs=20)
-        comp_rows.append({"setting": f"2-UAV, no sharing ({policy})", **s_noshare})
+    baseline_delta = 0.5
+    cfg_event = SimConfig(**{**base.__dict__, "delta": baseline_delta})
+    _, summ_event = monte_carlo_single(cfg_event, "event", runs=30)
+    target_updates = max(1.0, summ_event["N_tx_mean"])
+    periodic_M = max(1, int(round(cfg_event.T_steps / target_updates)))
+    random_q = min(1.0, max(0.01, target_updates / cfg_event.T_steps))
 
-        cfg_share = SimConfig(
-            **{
-                **base2.__dict__,
-                "share_pose": True,
-                "share_policy": "event",
-                "share_delta": 2.0,
-                "base_policy": policy,
+    base_rows = []
+    for policy, kwargs in [
+        ("event", {}),
+        ("periodic", {"periodic_M": periodic_M}),
+        ("random", {"random_q": random_q}),
+    ]:
+        _, s = monte_carlo_single(cfg_event, policy, runs=30, **kwargs)
+        base_rows.append(
+            {
+                "policy": policy,
+                "delta": baseline_delta,
+                "periodic_M": periodic_M if policy == "periodic" else np.nan,
+                "random_q": random_q if policy == "random" else np.nan,
+                **s,
             }
         )
-        _, s_share = monte_carlo_two(cfg_share, base_policy=policy, runs=20)
-        comp_rows.append({"setting": f"2-UAV, event-triggered pose sharing ({policy})", **s_share})
+    df_base = pd.DataFrame(base_rows)
+    df_base.to_csv(output_dir / "exp_single_uav_baselines.csv", index=False)
 
-    comp = pd.DataFrame(comp_rows)
-    comp.to_csv(output_dir / "exp_two_uav_baselines.csv", index=False)
-    print("Two-UAV baselines:\n", comp)
-    fig, axes = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
-    labels = comp["setting"].str.replace("2-UAV, ", "", regex=False)
-    x = np.arange(len(comp))
-    axes[0].bar(
-        x,
-        comp["rms_avg_mean"],
-        yerr=comp["rms_avg_std"],
-        capsize=3,
-        color="tab:blue",
-    )
-    axes[0].set_ylabel("Avg RMS tracking error (m)")
-    axes[0].set_title("Two-UAV baselines")
-    axes[1].bar(
-        x,
-        comp["bits_mean"],
-        yerr=comp["bits_std"],
-        capsize=3,
-        color="tab:orange",
-    )
-    axes[1].set_ylabel("Average bits used (total)")
-    axes[1].set_xticks(x)
-    axes[1].set_xticklabels(labels, rotation=20, ha="right")
-    save_figure(fig, output_dir / "fig_two_uav_baselines.png")
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True)
+    labels = df_base["policy"].str.capitalize()
+    x = np.arange(len(df_base))
+    axes[0].bar(x, df_base["J_mean"], yerr=df_base["J_std"], capsize=3, color="tab:blue")
+    axes[0].set_ylabel("Quadratic cost J")
+    axes[0].set_title("Baseline J (matched updates)")
+    axes[1].bar(x, df_base["rms_mean"], yerr=df_base["rms_std"], capsize=3, color="tab:green")
+    axes[1].set_ylabel("RMS tracking error (m)")
+    axes[1].set_title("Baseline RMS (matched updates)")
+    axes[2].bar(x, df_base["bits_mean"], yerr=df_base["bits_std"], capsize=3, color="tab:orange")
+    axes[2].set_ylabel("Average bits used (total)")
+    axes[2].set_title("Baseline bits (matched updates)")
+    for ax in axes:
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.grid(axis="y")
+    save_figure(fig, output_dir / "fig_single_uav_baselines.png")
 
-    df_traj, _ = simulate_two_uav(cfg_share, base_policy="event")
-    fig, ax = plt.subplots(figsize=(6.5, 6))
-    ax.plot(df_traj["px1_ref"], df_traj["py1_ref"], "--", label="ref UAV1", color="tab:blue")
-    ax.plot(df_traj["px1"], df_traj["py1"], label="UAV1", color="tab:blue", alpha=0.8)
-    ax.plot(df_traj["px2_ref"], df_traj["py2_ref"], "--", label="ref UAV2", color="tab:orange")
-    ax.plot(df_traj["px2"], df_traj["py2"], label="UAV2", color="tab:orange", alpha=0.8)
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("y (m)")
-    ax.set_title("Two-UAV field coverage (with sharing)")
-    ax.grid(True)
-    ax.legend()
-    save_figure(fig, output_dir / "fig_two_uav_trajectory.png")
+    metrics = [
+        ("J_mean", "J (lower better)"),
+        ("rms_mean", "RMS (lower better)"),
+        ("bits_mean", "Bits (lower better)"),
+        ("tx_rate_mean", "Tx rate (lower better)"),
+        ("fail_rate", "Fail rate (lower better)"),
+    ]
+    vals = np.array([df_base[m[0]].values for m in metrics])
+    min_v = vals.min(axis=1, keepdims=True)
+    max_v = vals.max(axis=1, keepdims=True)
+    norm = (vals - min_v) / (max_v - min_v + 1e-12)
+    radar = 1.0 - norm
+    angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False)
+    angles = np.r_[angles, angles[0]]
+    fig = plt.figure(figsize=(6.5, 6.5))
+    ax = fig.add_subplot(111, polar=True)
+    for idx, row in enumerate(df_base.itertuples(index=False)):
+        vals_r = np.r_[radar[:, idx], radar[0, idx]]
+        ax.plot(angles, vals_r, label=str(row.policy).capitalize())
+        ax.fill(angles, vals_r, alpha=0.12)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels([m[1] for m in metrics])
+    ax.set_yticklabels([])
+    ax.set_title("Single-UAV multi-metric comparison (normalized)")
+    ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+    save_figure(fig, output_dir / "fig_single_uav_radar.png")
+
+    heat_delta = np.logspace(-2, 0.5, num=6)
+    heat_pbad = [0.1, 0.3, 0.5, 0.7, 0.9]
+    heat_rows = []
+    heat_grid = np.zeros((len(heat_pbad), len(heat_delta)))
+    for i, p_bad in enumerate(heat_pbad):
+        for j, delta in enumerate(heat_delta):
+            cfg = SimConfig(
+                **{
+                    **base.__dict__,
+                    "delta": float(delta),
+                    "p_loss_bad": float(p_bad),
+                }
+            )
+            _, summ = monte_carlo_single(cfg, "event", runs=20)
+            heat_grid[i, j] = summ["rms_mean"]
+            heat_rows.append(
+                {
+                    "p_loss_bad": float(p_bad),
+                    "delta": float(delta),
+                    "rms_mean": summ["rms_mean"],
+                    "rms_std": summ["rms_std"],
+                    "J_mean": summ["J_mean"],
+                    "J_std": summ["J_std"],
+                    "bits_mean": summ["bits_mean"],
+                    "bits_std": summ["bits_std"],
+                }
+            )
+    df_heat = pd.DataFrame(heat_rows)
+    df_heat.to_csv(output_dir / "exp_sensitivity_heatmap.csv", index=False)
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.8))
+    im = ax.imshow(heat_grid, cmap="viridis", aspect="auto")
+    ax.set_xticks(np.arange(len(heat_delta)))
+    ax.set_xticklabels([f"{d:.2f}" for d in heat_delta])
+    ax.set_yticks(np.arange(len(heat_pbad)))
+    ax.set_yticklabels([f"{p:.1f}" for p in heat_pbad])
+    ax.set_xlabel("Event-trigger threshold delta")
+    ax.set_ylabel("p_loss_bad")
+    ax.set_title("Sensitivity: RMS vs delta and p_loss_bad")
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("RMS tracking error (m)")
+    save_figure(fig, output_dir / "fig_sensitivity_heatmap.png")
 
     print(
         "Saved figures & CSVs:",
-        "fig_pareto_tradeoff.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.png, fig_two_uav_baselines.png, fig_two_uav_trajectory.png",
-        "exp_pareto_tradeoff.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_two_uav_baselines.csv",
+        "fig_pareto_tradeoff.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.png, fig_single_uav_baselines.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
+        "exp_pareto_tradeoff.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_single_uav_baselines.csv, exp_sensitivity_heatmap.csv",
     )
