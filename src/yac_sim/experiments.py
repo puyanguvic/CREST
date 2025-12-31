@@ -292,6 +292,78 @@ def run_experiments(output_dir: Path):
     ax.legend()
     save_figure(fig, output_dir / "fig_markov_robustness.png")
 
+    robust_delta_list = delta_list[:8]
+    robust_M_list = [1, 2, 3, 5, 8, 10, 15, 20, 30, 40]
+    robust_rows = []
+    for delta in robust_delta_list:
+        cfg_event = SimConfig(
+            **{
+                **base.__dict__,
+                "delta": float(delta),
+                "sigma_v": 0.2,
+                "bits_per_value": 8,
+                "p_loss_good": 0.05,
+                "p_loss_bad": 0.5,
+                "p_g2b": 0.02,
+                "p_b2g": 0.1,
+            }
+        )
+        _, summ_event = monte_carlo_single(cfg_event, "event", runs=30)
+        robust_rows.append(
+            {
+                "scheme": "ET",
+                "param": float(delta),
+                "bits_mean": summ_event["bits_mean"],
+                "J_mean": summ_event["J_mean"],
+            }
+        )
+    for M in robust_M_list:
+        cfg_per = SimConfig(
+            **{
+                **base.__dict__,
+                "sigma_v": 0.2,
+                "bits_per_value": 8,
+                "p_loss_good": 0.05,
+                "p_loss_bad": 0.5,
+                "p_g2b": 0.02,
+                "p_b2g": 0.1,
+            }
+        )
+        _, summ_periodic = monte_carlo_single(cfg_per, "periodic", runs=30, periodic_M=M)
+        robust_rows.append(
+            {
+                "scheme": "PER",
+                "param": int(M),
+                "bits_mean": summ_periodic["bits_mean"],
+                "J_mean": summ_periodic["J_mean"],
+            }
+        )
+    df_robust = pd.DataFrame(robust_rows)
+    df_robust.to_csv(output_dir / "exp_robustness_summary.csv", index=False)
+    df_et = df_robust[df_robust["scheme"] == "ET"].sort_values("bits_mean")
+    df_per = df_robust[df_robust["scheme"] == "PER"].sort_values("bits_mean")
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.plot(
+        df_et["bits_mean"],
+        df_et["J_mean"],
+        linestyle="-",
+        marker="o",
+        label="Event-triggered (ET)",
+    )
+    ax.plot(
+        df_per["bits_mean"],
+        df_per["J_mean"],
+        linestyle="--",
+        marker="o",
+        markerfacecolor="none",
+        label="Periodic (PER)",
+    )
+    ax.set_xlabel(r"Average bits used $B(0{:}T)$")
+    ax.set_ylabel(r"Quadratic cost $J$")
+    ax.grid(True, linestyle="--", linewidth=0.6, color="0.8")
+    ax.legend()
+    save_figure(fig, output_dir / "fig_robustness_summary.pdf")
+
     candidate_M = [1, 2, 3, 5, 8, 10, 15, 20, 30, 40, 50]
     per_rows = []
     for M in candidate_M:
@@ -560,6 +632,6 @@ def run_experiments(output_dir: Path):
 
     print(
         "Saved figures & CSVs:",
-        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.pdf, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.pdf, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
+        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.pdf, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_robustness_summary.pdf, fig_periodic_comparison.pdf, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
         "exp_pareto_tradeoff.csv, exp_pareto_tradeoff_runs.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_single_uav_baselines.csv, exp_single_uav_baseline_runs.csv, exp_sensitivity_heatmap.csv",
     )

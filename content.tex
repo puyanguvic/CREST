@@ -425,6 +425,16 @@ For each setting, we report the quadratic cost $J$, the total number of transmit
 The results show that coarser quantization and tighter bit budgets gradually degrade performance, but the closed-loop system remains practically stable across all tested conditions (Fig.~\ref{fig:quant_tradeoff} and Fig.~\ref{fig:budget_tradeoff}).
 Bursty packet losses primarily increase the inter-update intervals, yet the event-triggered mechanism adapts by allocating communication resources when the prediction error becomes significant (Fig.~\ref{fig:markov_robustness}).
 To highlight sensitivity across operating points, Fig.~\ref{fig:sensitivity_heatmap} visualizes the RMS error over a grid of $\delta$ and bursty-loss severity, indicating smooth degradation rather than abrupt failure.
+Fig.~\ref{fig:robustness_summary} summarizes the resulting budget--performance trade-off under a fixed realistic impairment setting.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\linewidth]{result/fig_robustness_summary.pdf}
+\caption{Robustness under practical communication impairments.
+Event-triggered (ET) and periodic (PER) transmission are compared in the presence of measurement noise, finite-bit quantization, and bursty Gilbert--Elliott packet loss.
+ET maintains lower cost than PER across communication budgets, indicating that the advantage of state-dependent communication persists under realistic conditions.}
+\label{fig:robustness_summary}
+\end{figure}
 
 \begin{figure}[t]
 \centering
