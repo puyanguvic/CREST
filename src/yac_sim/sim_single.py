@@ -1,196 +1,149 @@
-import math
 
+from __future__ import annotations
 import numpy as np
-import pandas as pd
 
+from .config import SimConfig
+from .models import double_integrator_2d
+from .utils import dlqr, norm2
 from .channels import GilbertElliottChannel
-from .models import build_double_integrator, dlqr, generate_lawnmower_ref
 from .quantization import uniform_quantize
-from .utils import clip_u, packet_bits
 
+def _cost_matrices(cfg: SimConfig) -> tuple[np.ndarray, np.ndarray]:
+    Q = np.diag([cfg.Q_px, cfg.Q_vx, cfg.Q_py, cfg.Q_vy]).astype(float)
+    R = (cfg.R_u * np.eye(2)).astype(float)
+    return Q, R
 
-def simulate_single_uav(cfg, policy: str, periodic_M=1, random_q=1.0):
-    """Simulate a single UAV tracking a lawnmower reference under communication constraints.
+def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None = None) -> dict:
+    """Simulate one rollout. policy in {ET, PER, RAND}."""
+    if rng is None:
+        rng = np.random.default_rng(0)
 
-    This function supports two analysis modes:
+    A, B = double_integrator_2d(cfg.Ts)
+    n = A.shape[0]
+    Q, R = _cost_matrices(cfg)
+    K = dlqr(A, B, Q, R)  # u = -K x_hat
 
-    - cfg.mode == "theory":
-        Matches the paper baseline abstraction:
-          * perfect measurement y_k = x_k
-          * if a transmission is attempted, it is delivered (no loss)
-          * upon receiving an update, the controller-side estimate is reset to truth
-            (x_hat_k = x_k), yielding an explicit grow-and-reset prediction error.
+    A_hat = A + cfg.mismatch_eps * np.eye(n)
 
-    - cfg.mode == "robust":
-        Uses measurement noise, quantization, and Gilbert–Elliott packet loss.
+    ch = GilbertElliottChannel(cfg.p_good_to_bad, cfg.p_bad_to_good, cfg.loss_good, cfg.loss_bad, rng)
 
-    Policies:
-      - 'event': send if ||tilde_pred|| > delta, where tilde_pred = x - x_hat_pred
-      - 'periodic': send every M steps
-      - 'random': send with prob q
-    """
-    # Normalize mode switches if user didn't set the flags explicitly
-    if hasattr(cfg, "normalize_modes"):
-        cfg.normalize_modes()
+    # initial state: random position/velocity
+    x = np.array([rng.normal(0, 5.0), rng.normal(0, 1.0), rng.normal(0, 5.0), rng.normal(0, 1.0)], dtype=float)
+    x_hat = x.copy()  # controller-side estimate
+    u_prev = np.zeros((2,), dtype=float)
 
-    rng = np.random.default_rng(cfg.seed)
-    A, B, C = build_double_integrator(cfg.Ts)
-    K, _ = dlqr(A, B, cfg.Q, cfg.R)
-    x_ref = generate_lawnmower_ref(
-        cfg.Ts,
-        cfg.T_steps,
-        cfg.field_L,
-        cfg.field_W,
-        cfg.lane_spacing,
-        cfg.v_ref,
-    )
+    # logs
+    x_norm = np.zeros(cfg.T_steps)
+    tilde_pred_norm = np.zeros(cfg.T_steps)
+    tx_attempt = np.zeros(cfg.T_steps, dtype=int)
+    tx_deliv = np.zeros(cfg.T_steps, dtype=int)
 
-    chan = GilbertElliottChannel(
-        rng,
-        p_loss_good=cfg.p_loss_good,
-        p_loss_bad=cfg.p_loss_bad,
-        p_g2b=cfg.p_g2b,
-        p_b2g=cfg.p_b2g,
-        init_state=0,
-    )
-
-    x = np.zeros(4)
-    x_hat = np.zeros(4)
-    u_prev = np.zeros(2)
-
-    bits_used = 0
-    N_tx_attempt = 0
-    N_tx_delivered = 0
-    qerr_acc = 0.0
-
-    J_cost = 0.0
-    consecutive_bad = 0
-    failed = False
-
-    rows = []
+    J = 0.0
 
     for k in range(cfg.T_steps):
-        chan.step()
+        # plant evolves with process noise
+        w = rng.normal(0.0, cfg.sigma_w, size=(n,))
+        x = A @ x + B @ u_prev + w
 
-        # ---- measurement (paper baseline uses perfect state) ----
-        if cfg.ideal_measurement:
-            y = (C @ x)
+        # measurement
+        v = rng.normal(0.0, cfg.sigma_v, size=(n,))
+        y = x + v
+
+        # predictor at controller
+        x_hat_pred = A_hat @ x_hat + B @ u_prev
+        tilde_pred = y - x_hat_pred  # innovation / pred error proxy
+        tilde_pred_norm[k] = norm2(tilde_pred)
+
+        # decide whether to transmit
+        do_tx = False
+        if policy == "ET":
+            do_tx = tilde_pred_norm[k] > cfg.delta
+        elif policy == "PER":
+            do_tx = (k % max(int(cfg.period_M), 1) == 0)
+        elif policy == "RAND":
+            do_tx = (float(rng.random()) < cfg.random_p)
         else:
-            y = (C @ x) + rng.normal(0.0, cfg.sigma_v, size=4)
-
-        # ---- controller-side prediction ----
-        x_hat_pred = A @ x_hat + B @ u_prev
-        tilde_pred = x - x_hat_pred  # prediction error before (potential) update
-
-        # ---- bits per value (optional adaptive coding) ----
-        bpv = cfg.bits_per_value
-        if getattr(cfg, "adaptive_bits", False):
-            bpv = 6 if chan.state == 1 else cfg.bits_per_value
-
-        # ---- decide whether to transmit ----
-        if policy == "event":
-            do_tx = np.linalg.norm(tilde_pred) > cfg.delta
-        elif policy == "periodic":
-            do_tx = (k % periodic_M) == 0
-        elif policy == "random":
-            do_tx = rng.random() < random_q
-        else:
-            raise ValueError("Unknown policy")
-
-        # ---- transmission + reception ----
-        received = False
-        loss_p = cfg.p_loss_good if chan.state == 0 else cfg.p_loss_bad
+            raise ValueError(f"Unknown policy: {policy}")
 
         if do_tx:
-            pkt_bits = packet_bits(4, bpv, cfg.bits_per_packet_overhead)
-            if bits_used + pkt_bits <= cfg.bit_budget_total:
-                bits_used += pkt_bits
-                N_tx_attempt += 1
-
-                if cfg.ideal_comm:
-                    received = True
+            tx_attempt[k] = 1
+            delivered = True if cfg.mode == "theory" else ch.deliver()
+            if delivered:
+                tx_deliv[k] = 1
+                if cfg.mode == "theory":
+                    x_hat = x.copy()  # exact reset
                 else:
-                    received, _, _ = chan.transmit()
+                    yq = uniform_quantize(y, cfg.bits_per_value, cfg.q_min, cfg.q_max)
+                    x_hat = yq.copy()
             else:
-                do_tx = False
-
-        # ---- estimator update (grow-and-reset lives here) ----
-        if received:
-            N_tx_delivered += 1
-
-            if cfg.ideal_quant:
-                x_hat = x.copy()  # reset to truth (paper baseline)
-            else:
-                # In the robust mode, we treat the payload as the measurement (possibly quantized).
-                yq, qe = uniform_quantize(y, bits=bpv, x_min=-50.0, x_max=50.0)
-                qerr_acc += qe
-                x_hat = yq.copy()
+                x_hat = x_hat_pred
         else:
             x_hat = x_hat_pred
 
-        # After update (or not), define the realized prediction error
-        tilde = x - x_hat
+        # control
+        u = -(K @ x_hat).reshape(-1)
+        # cost (use true x and u)
+        J += float(x.T @ Q @ x + u.T @ R @ u)
 
-        # ---- control ----
-        e_hat = x_hat - x_ref[k]
-        u = (-K @ e_hat.reshape(-1, 1)).flatten()
-        u = clip_u(u, cfg.u_max)
-
-        e_true = x - x_ref[k]
-        J_cost += float(e_true.T @ cfg.Q @ e_true + u.T @ cfg.R @ u)
-
-        # ---- plant step ----
-        x = A @ x + B @ u
-        if getattr(cfg, "sigma_w", 0.0) > 0.0:
-            x = x + rng.normal(0.0, cfg.sigma_w, size=4)
+        # log
+        x_norm[k] = norm2(x)
         u_prev = u
 
-        # ---- failure metric ----
-        pos_err = float(np.linalg.norm(x[[0, 2]] - x_ref[k][[0, 2]]))
-        if pos_err > cfg.fail_err:
-            consecutive_bad += 1
-        else:
-            consecutive_bad = 0
-        if consecutive_bad >= cfg.fail_window:
-            failed = True
+    bits_attempt = int(tx_attempt.sum()) * n * int(cfg.bits_per_value)
+    bits_deliv = int(tx_deliv.sum()) * n * int(cfg.bits_per_value)
 
-        rows.append(
-            {
-                "k": k,
-                "px": float(x[0]),
-                "py": float(x[2]),
-                "px_ref": float(x_ref[k][0]),
-                "py_ref": float(x_ref[k][2]),
-                "pos_err": pos_err,
-                "x_norm": float(np.linalg.norm(x)),
-                "tilde_pred_norm": float(np.linalg.norm(tilde_pred)),
-                "tilde_norm": float(np.linalg.norm(tilde)),
-                "ux": float(u[0]),
-                "uy": float(u[1]),
-                "tx": int(do_tx),
-                "rx": int(received),
-                "chan_state": int(chan.state),
-                "loss_p": float(loss_p),
-                "bits_used": int(bits_used),
-                "bpv": int(bpv),
-            }
-        )
+    return dict(
+        J=J,
+        x_norm=x_norm,
+        tilde_pred_norm=tilde_pred_norm,
+        tx_attempt=tx_attempt,
+        tx_deliv=tx_deliv,
+        N_attempt=int(tx_attempt.sum()),
+        N_deliv=int(tx_deliv.sum()),
+        bits_attempt=bits_attempt,
+        bits_deliv=bits_deliv,
+    )
 
-    df = pd.DataFrame(rows)
-    rms = math.sqrt(float(np.mean(df["pos_err"].values**2)))
-    energy = float(np.sum(df["ux"].values**2 + df["uy"].values**2))
-    tx_rate = float(N_tx_delivered) / cfg.T_steps
-    tx_attempt_rate = float(N_tx_attempt) / cfg.T_steps
-    avg_qerr = float(qerr_acc / max(1, df["rx"].sum()))
-    return df, {
-        "rms_err": rms,
-        "energy": energy,
-        "J_cost": float(J_cost),
-        "N_tx": int(N_tx_delivered),
-        "N_tx_attempt": int(N_tx_attempt),
-        "tx_rate": tx_rate,
-        "tx_attempt_rate": tx_attempt_rate,
-        "bits_used": int(bits_used),
-        "avg_qerr": avg_qerr,
-        "failed": int(failed),
-    }
+def monte_carlo(cfg: SimConfig, policy: str, deltas: list[float] | None = None, periods: list[int] | None = None, ps: list[float] | None = None) -> list[dict]:
+    """Run MC for a sweep of a single policy knob."""
+    rng_master = np.random.default_rng(cfg.seed)
+    seeds = rng_master.integers(0, 2**31-1, size=cfg.mc_runs, dtype=np.int64).tolist()
+
+    results = []
+    if policy == "ET":
+        assert deltas is not None
+        for d in deltas:
+            Js, bitsD, bitsA = [], [], []
+            for s in seeds:
+                rng = np.random.default_rng(int(s))
+                cfg2 = SimConfig(**cfg.__dict__)
+                cfg2.delta = float(d)
+                out = simulate(cfg2, "ET", rng=rng)
+                Js.append(out["J"]); bitsD.append(out["bits_deliv"]); bitsA.append(out["bits_attempt"])
+            results.append(dict(param=float(d), J=np.array(Js), bits_deliv=np.array(bitsD), bits_attempt=np.array(bitsA)))
+    elif policy == "PER":
+        assert periods is not None
+        for M in periods:
+            Js, bitsD, bitsA = [], [], []
+            for s in seeds:
+                rng = np.random.default_rng(int(s))
+                cfg2 = SimConfig(**cfg.__dict__)
+                cfg2.period_M = int(M)
+                out = simulate(cfg2, "PER", rng=rng)
+                Js.append(out["J"]); bitsD.append(out["bits_deliv"]); bitsA.append(out["bits_attempt"])
+            results.append(dict(param=int(M), J=np.array(Js), bits_deliv=np.array(bitsD), bits_attempt=np.array(bitsA)))
+    elif policy == "RAND":
+        assert ps is not None
+        for p in ps:
+            Js, bitsD, bitsA = [], [], []
+            for s in seeds:
+                rng = np.random.default_rng(int(s))
+                cfg2 = SimConfig(**cfg.__dict__)
+                cfg2.random_p = float(p)
+                out = simulate(cfg2, "RAND", rng=rng)
+                Js.append(out["J"]); bitsD.append(out["bits_deliv"]); bitsA.append(out["bits_attempt"])
+            results.append(dict(param=float(p), J=np.array(Js), bits_deliv=np.array(bitsD), bits_attempt=np.array(bitsA)))
+    else:
+        raise ValueError(policy)
+
+    return results

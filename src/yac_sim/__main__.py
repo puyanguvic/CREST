@@ -1,12 +1,9 @@
-from pathlib import Path
 
-from .experiments import run_experiments
+from __future__ import annotations
+from .experiments import run_all
 
-
-def main():
-    output_dir = Path("result")
-    run_experiments(output_dir, mode='paper')
-
+def main() -> None:
+    run_all("result")
 
 if __name__ == "__main__":
     main()

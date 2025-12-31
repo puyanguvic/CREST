@@ -1,237 +1,313 @@
+
 from __future__ import annotations
-
+import os
 from pathlib import Path
-from dataclasses import asdict
-
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from .config import SimConfig
-from .sim_single import simulate_single_uav
+from .sim_single import simulate, monte_carlo
+from .utils import mean_ci95, knee_point
 
+def apply_ieee_style() -> None:
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 8,
+        "axes.labelsize": 8,
+        "axes.titlesize": 8,
+        "legend.fontsize": 7,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "axes.linewidth": 0.6,
+        "lines.linewidth": 1.0,
+        "lines.markersize": 3.5,
+        "grid.linewidth": 0.4,
+    })
 
-def apply_plot_style() -> None:
-    """Professional, paper-friendly Matplotlib styling."""
-    try:
-        plt.style.use("seaborn-v0_8-whitegrid")
-    except OSError:
-        pass
-    plt.rcParams.update(
-        {
-            "figure.dpi": 120,
-            "savefig.dpi": 300,
-            "font.size": 11,
-            "axes.titlesize": 12,
-            "axes.labelsize": 11,
-            "legend.fontsize": 10,
-            "lines.linewidth": 1.6,
-            "axes.grid": True,
-            "grid.alpha": 0.35,
-        }
-    )
+def savefig(fig, outdir: Path, name: str) -> None:
+    outdir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(outdir / f"{name}.pdf", bbox_inches="tight")
+    fig.savefig(outdir / f"{name}.png", dpi=300, bbox_inches="tight")
 
+def _prep_tradeoff_data(et_res, per_res, rand_res):
+    # mean+ci arrays
+    def summarize(res_list, xkey="bits_deliv"):
+        xs, ys, yci = [], [], []
+        for r in res_list:
+            x_m, _ = mean_ci95(r[xkey])
+            y_m, y_hw = mean_ci95(r["J"])
+            xs.append(x_m); ys.append(y_m); yci.append(y_hw)
+        xs = np.array(xs); ys = np.array(ys); yci = np.array(yci)
+        order = np.argsort(xs)
+        return xs[order], ys[order], yci[order], order
+    x_et, y_et, ci_et, _ = summarize(et_res)
+    x_per, y_per, ci_per, _ = summarize(per_res)
+    x_rd, y_rd, ci_rd, _ = summarize(rand_res)
+    return (x_et, y_et, ci_et), (x_per, y_per, ci_per), (x_rd, y_rd, ci_rd)
 
-def save_figure(fig: plt.Figure, path: Path) -> None:
-    """Save a PNG (for quick viewing) + PDF (for submission)."""
-    fig.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, bbox_inches="tight", dpi=300, facecolor="white")
-    if path.suffix.lower() == ".png":
-        fig.savefig(path.with_suffix(".pdf"), bbox_inches="tight", facecolor="white")
+def figure_A_pareto(cfg: SimConfig, outdir: Path) -> tuple[float, float]:
+    """Figure A: Pareto with multiple baselines + CI + knee. Returns (delta_knee, budget_knee_bits)."""
+    apply_ieee_style()
+
+    # Sweeps
+    deltas = np.linspace(0.05, 1.0, 14).tolist()
+    periods = [1, 2, 3, 4, 5, 8, 10, 15, 20, 30, 40]
+    ps = np.linspace(0.02, 0.45, 12).tolist()
+
+    et_res = monte_carlo(cfg, "ET", deltas=deltas)
+    per_res = monte_carlo(cfg, "PER", periods=periods)
+    rd_res = monte_carlo(cfg, "RAND", ps=ps)
+
+    (x_et, y_et, ci_et), (x_per, y_per, ci_per), (x_rd, y_rd, ci_rd) = _prep_tradeoff_data(et_res, per_res, rd_res)
+
+    # knee on ET curve in (bits, cost)
+    knee_idx = knee_point(x_et, y_et)
+    delta_knee = float(np.array(deltas)[np.argsort(x_et)][knee_idx]) if len(deltas)==len(x_et) else float(deltas[knee_idx])
+    budget_knee = float(x_et[knee_idx])
+
+    fig = plt.figure(figsize=(3.5, 2.4))
+    ax = fig.add_subplot(111)
+    ax.errorbar(x_et, y_et, yerr=ci_et, fmt="o-", capsize=2, label="ET (sweep $\delta$)")
+    ax.errorbar(x_per, y_per, yerr=ci_per, fmt="s-", capsize=2, label="PER (sweep $M$)")
+    ax.errorbar(x_rd, y_rd, yerr=ci_rd, fmt="^-", capsize=2, label="RAND (sweep $p$)")
+    ax.plot([budget_knee], [y_et[knee_idx]], marker="D", linestyle="None", markersize=5, label="ET knee")
+
+    ax.set_xlabel("Delivered communication (bits)")
+    ax.set_ylabel("Quadratic cost $J$")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", frameon=True, borderpad=0.3)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+
+    savefig(fig, outdir, "fig_A_pareto_tradeoff")
+    plt.close(fig)
+    return delta_knee, budget_knee
+
+def figure_B_time_response(cfg: SimConfig, outdir: Path, delta_knee: float) -> None:
+    """Figure B: time response with tx markers + inset zoom."""
+    apply_ieee_style()
+
+    cfg1 = SimConfig(**cfg.__dict__)
+    cfg1.delta = float(delta_knee)
+    # a single representative run (fixed seed for reproducibility)
+    rng = np.random.default_rng(cfg.seed + 123)
+    out = simulate(cfg1, "ET", rng=rng)
+
+    x_norm = out["x_norm"]
+    e_norm = out["tilde_pred_norm"]
+    tx = out["tx_deliv"]
+
+    t = np.arange(cfg1.T_steps) * cfg1.Ts
+
+    fig = plt.figure(figsize=(3.5, 2.6))
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212, sharex=ax1)
+
+    ax1.plot(t, x_norm, label="$\|x_k\|_2$")
+    ax1.set_ylabel("$\|x_k\|_2$")
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc="best", frameon=True, borderpad=0.3)
+
+    ax2.plot(t, e_norm, label="$\|\~x_k^{pred}\|_2$")
+    ax2.axhline(cfg1.delta, linestyle="--", linewidth=0.9, label="$\delta$")
+    # tx markers at bottom
+    idx = np.where(tx > 0)[0]
+    if idx.size > 0:
+        ax2.vlines(t[idx], ymin=0, ymax=np.minimum(e_norm[idx], cfg1.delta*1.2), linewidth=0.6)
+    ax2.set_xlabel("Time (s)")
+    ax2.set_ylabel("Pred. error norm")
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(loc="best", frameon=True, borderpad=0.3)
+
+    # inset zoom on a window with events
+    if idx.size > 5:
+        k0 = int(idx[min(3, idx.size-1)])
+        a = max(k0 - 25, 0)
+        b = min(k0 + 60, cfg1.T_steps-1)
+        axins = inset_axes(ax2, width="38%", height="45%", loc="upper right", borderpad=0.8)
+        axins.plot(t[a:b], e_norm[a:b])
+        axins.axhline(cfg1.delta, linestyle="--", linewidth=0.8)
+        axins.set_xticks([]); axins.set_yticks([])
+        axins.grid(True, alpha=0.25)
+
+    savefig(fig, outdir, "fig_B_time_response")
     plt.close(fig)
 
+def figure_C_budget_curves(cfg: SimConfig, outdir: Path) -> None:
+    """Figure C: cost vs budget curves (ET vs PER-optimal vs RAND) over delivered bits."""
+    apply_ieee_style()
 
-def monte_carlo_single(cfg: SimConfig, policy: str, runs: int = 30, **kwargs):
-    stats = []
-    for i in range(runs):
-        c = SimConfig(**{**asdict(cfg), "seed": cfg.seed + i})
-        _, s = simulate_single_uav(c, policy, **kwargs)
-        stats.append(s)
-    df = pd.DataFrame(stats)
-    return df, {
-        "rms_mean": float(df["rms_err"].mean()),
-        "rms_std": float(df["rms_err"].std()),
-        "J_mean": float(df["J_cost"].mean()),
-        "J_std": float(df["J_cost"].std()),
-        "N_tx_mean": float(df["N_tx"].mean()),
-        "N_tx_std": float(df["N_tx"].std()),
-        "tx_rate_mean": float(df["tx_rate"].mean()),
-        "bits_mean": float(df["bits_used"].mean()),
-        "bits_std": float(df["bits_used"].std()),
-    }
+    deltas = np.linspace(0.05, 1.0, 16).tolist()
+    periods = [1,2,3,4,5,6,8,10,12,15,20,25,30,40]
+    ps = np.linspace(0.02, 0.45, 14).tolist()
 
+    et_res = monte_carlo(cfg, "ET", deltas=deltas)
+    per_res = monte_carlo(cfg, "PER", periods=periods)
+    rd_res = monte_carlo(cfg, "RAND", ps=ps)
 
-def run_experiments(output_dir: Path, mode: str = "paper"):
-    """Entry point.
+    (x_et, y_et, ci_et), (x_per, y_per, ci_per), (x_rd, y_rd, ci_rd) = _prep_tradeoff_data(et_res, per_res, rd_res)
 
-    mode:
-      - "paper": generate exactly 4 publication-ready figures for the paper
-    """
-    if mode != "paper":
-        raise ValueError("Only mode='paper' is supported in this lightweight paper build.")
-    return run_experiments_paper(output_dir)
+    # normalize by near-full-comm baseline (PER M=1 mean J)
+    J_full = float(y_per[np.argmin(x_per)]) if x_per.size else float(y_et.min())
+    y_etn, y_pern, y_rdn = y_et / J_full, y_per / J_full, y_rd / J_full
+    ci_etn, ci_pern, ci_rdn = ci_et / J_full, ci_per / J_full, ci_rd / J_full
 
+    fig = plt.figure(figsize=(3.5, 2.2))
+    ax = fig.add_subplot(111)
+    ax.errorbar(x_et, y_etn, yerr=ci_etn, fmt="o-", capsize=2, label="ET")
+    ax.errorbar(x_per, y_pern, yerr=ci_pern, fmt="s-", capsize=2, label="PER")
+    ax.errorbar(x_rd, y_rdn, yerr=ci_rdn, fmt="^-", capsize=2, label="RAND")
+    ax.set_xlabel("Delivered communication (bits)")
+    ax.set_ylabel("Normalized cost $J/J_{PER,M=1}$")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", frameon=True, borderpad=0.3)
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
-def run_experiments_paper(output_dir: Path) -> None:
-    """Generate exactly four publication-ready figures.
+    savefig(fig, outdir, "fig_C_budget_curves")
+    plt.close(fig)
 
-    Figures:
-      1) fig_pareto_tradeoff
-      2) fig_time_response
-      3) fig_periodic_comparison
-      4) fig_robustness_summary
+def _best_under_budget(curve_bits: np.ndarray, curve_J: np.ndarray, budget: float, tol: float = 0.08) -> float:
+    """Pick best J among points whose bits within +/- tol*budget."""
+    if budget <= 0:
+        return float(curve_J.min())
+    lo = budget * (1 - tol)
+    hi = budget * (1 + tol)
+    mask = (curve_bits >= lo) & (curve_bits <= hi)
+    if np.any(mask):
+        return float(curve_J[mask].min())
+    # fallback: nearest neighbor
+    idx = int(np.argmin(np.abs(curve_bits - budget)))
+    return float(curve_J[idx])
 
-    CSVs are saved alongside the figures for reproducibility.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for p in output_dir.iterdir():
-        if p.is_file():
-            p.unlink()
+def figure_D_robustness_panel(cfg: SimConfig, outdir: Path, budget_bits: float) -> None:
+    """Figure D: 2x2 robustness panel sweeping impairment strengths, comparing best ET vs best PER at same delivered budget."""
+    apply_ieee_style()
 
-    apply_plot_style()
+    # base sweeps for knobs
+    deltas = np.linspace(0.05, 1.2, 18).tolist()
+    periods = [1,2,3,4,5,6,8,10,12,15,20,25,30,40]
 
-    # -----------------------
-    # Baseline (paper theory)
-    # -----------------------
-    base = SimConfig()
-    base.mode = "theory"
-    # Small process noise makes prediction error grow between updates (so ET is visible).
-    base.sigma_w = max(base.sigma_w, 0.02)
+    # parameter grids
+    noise_grid = [0.0, 0.02, 0.05, 0.08, 0.10]
+    bits_grid  = [32, 12, 10, 8, 6]
+    loss_grid  = [0.0, 0.05, 0.10, 0.20, 0.30]
+    mismatch_grid = [0.0, 0.01, 0.02, 0.04, 0.06]
 
-    # ---------------------------
-    # (1) Pareto trade-off curve
-    # ---------------------------
-    delta_list = np.array([1e-2, 3e-2, 1e-1, 3e-1, 1.0, 3.0, 10.0])
-    pareto_rows = []
-    runs_rows = []
-    for d in delta_list:
-        cfg = SimConfig(**{**asdict(base), "delta": float(d)})
-        df_runs, summ = monte_carlo_single(cfg, policy="event", runs=30)
-        pareto_rows.append(
-            {
-                "delta": float(d),
-                "J_mean": summ["J_mean"],
-                "J_std": summ["J_std"],
-                "N_tx_mean": summ["N_tx_mean"],
-                "N_tx_std": summ["N_tx_std"],
-            }
-        )
-        df_runs = df_runs.copy()
-        df_runs["delta"] = float(d)
-        runs_rows.append(df_runs)
+    def build_curves(cfgX: SimConfig):
+        et = monte_carlo(cfgX, "ET", deltas=deltas)
+        per = monte_carlo(cfgX, "PER", periods=periods)
+        # summarize mean curves
+        def summarize(res_list):
+            xb, yb = [], []
+            for r in res_list:
+                x_m, _ = mean_ci95(r["bits_deliv"])
+                y_m, _ = mean_ci95(r["J"])
+                xb.append(x_m); yb.append(y_m)
+            xb = np.array(xb); yb = np.array(yb)
+            order = np.argsort(xb)
+            return xb[order], yb[order]
+        xet, yet = summarize(et)
+        xpe, ype = summarize(per)
+        return xet, yet, xpe, ype
 
-    df_pareto = pd.DataFrame(pareto_rows).sort_values("delta").reset_index(drop=True)
-    df_pareto.to_csv(output_dir / "exp_pareto_tradeoff.csv", index=False)
-    pd.concat(runs_rows, ignore_index=True).to_csv(output_dir / "exp_pareto_tradeoff_runs.csv", index=False)
+    # nominal for normalization
+    cfg_nom = SimConfig(**cfg.__dict__)
+    cfg_nom.mode = "robust"  # normalization uses same mode family as panel
+    xet0, yet0, xpe0, ype0 = build_curves(cfg_nom)
+    J_ref = _best_under_budget(xpe0, ype0, budget_bits)  # reference: PER at that budget
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.6))
-    ax.errorbar(
-        df_pareto["N_tx_mean"],
-        df_pareto["J_mean"],
-        xerr=df_pareto["N_tx_std"],
-        yerr=df_pareto["J_std"],
-        marker="o",
-        linestyle="-",
-        capsize=3,
-    )
-    ax.set_xlabel(r"Delivered updates $N_{\mathrm{tx}}$")
-    ax.set_ylabel(r"Quadratic cost $J(\delta)$")
-    ax.set_title("Performance–Communication Trade-off (Event-triggered)")
-    save_figure(fig, output_dir / "fig_pareto_tradeoff.png")
+    def eval_grid(var_name: str, grid):
+        et_best = []
+        per_best = []
+        for val in grid:
+            c = SimConfig(**cfg.__dict__)
+            c.mode = "robust"
+            # default robust assumptions
+            c.sigma_w = max(c.sigma_w, 0.02)
+            if var_name == "sigma_v":
+                c.sigma_v = float(val)
+            elif var_name == "bits":
+                c.bits_per_value = int(val)
+            elif var_name == "loss":
+                # set both states to same average loss for sweep clarity
+                c.loss_good = float(val)
+                c.loss_bad = float(val)
+            elif var_name == "mismatch":
+                c.mismatch_eps = float(val)
+            else:
+                raise ValueError(var_name)
 
-    # -----------------------------------------
-    # (2) Time response (grow-and-reset in time)
-    # -----------------------------------------
-    delta_mid = float(df_pareto["delta"].iloc[len(df_pareto) // 2])
-    cfg_mid = SimConfig(**{**asdict(base), "delta": delta_mid, "seed": base.seed + 7})
-    df_time, _ = simulate_single_uav(cfg_mid, policy="event")
+            xet, yet, xpe, ype = build_curves(c)
+            et_best.append(_best_under_budget(xet, yet, budget_bits) / J_ref)
+            per_best.append(_best_under_budget(xpe, ype, budget_bits) / J_ref)
+        return np.array(et_best), np.array(per_best)
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.6))
-    ax.plot(df_time["k"], df_time["x_norm"], label=r"$\|x_k\|$")
-    ax.plot(df_time["k"], df_time["tilde_pred_norm"], label=r"$\|\tilde x^{pred}_k\|$")
-    ax.axhline(delta_mid, linestyle="--", linewidth=1.2, label=r"threshold $\delta$")
-    ax.set_xlabel("Time step $k$")
-    ax.set_ylabel("Norm")
-    ax.set_title("Grow-and-Reset Mechanism (Representative Run)")
-    ax.legend()
-    save_figure(fig, output_dir / "fig_time_response.png")
+    et_noise, per_noise = eval_grid("sigma_v", noise_grid)
+    et_bits,  per_bits  = eval_grid("bits", bits_grid)
+    et_loss,  per_loss  = eval_grid("loss", loss_grid)
+    et_mis,   per_mis   = eval_grid("mismatch", mismatch_grid)
 
-    # ---------------------------------------------------
-    # (3) ET vs Periodic under matched communication usage
-    # ---------------------------------------------------
-    horizon = int(base.T_steps)
-    N_tx_et = float(df_pareto.loc[df_pareto["delta"] == delta_mid, "N_tx_mean"].iloc[0])
-    tx_rate = max(1e-6, N_tx_et / max(1, horizon))
-    M = int(max(1, round(1.0 / tx_rate)))
+    fig = plt.figure(figsize=(3.5, 3.2))
+    axs = [fig.add_subplot(221), fig.add_subplot(222), fig.add_subplot(223), fig.add_subplot(224)]
 
-    _, summ_et = monte_carlo_single(cfg_mid, policy="event", runs=30)
-    _, summ_per = monte_carlo_single(cfg_mid, policy="periodic", runs=30, periodic_M=M)
+    axs[0].plot(noise_grid, et_noise, marker="o", label="ET")
+    axs[0].plot(noise_grid, per_noise, marker="s", label="PER")
+    axs[0].set_title("Measurement noise")
+    axs[0].set_xlabel("$\sigma_v$")
+    axs[0].set_ylabel("Cost ratio")
+    axs[0].grid(True, alpha=0.3)
 
-    df_cmp = pd.DataFrame(
-        [
-            {"policy": "ET", "J_mean": summ_et["J_mean"], "J_std": summ_et["J_std"], "bits_mean": summ_et["bits_mean"]},
-            {"policy": f"PER (M={M})", "J_mean": summ_per["J_mean"], "J_std": summ_per["J_std"], "bits_mean": summ_per["bits_mean"]},
-        ]
-    )
-    df_cmp.to_csv(output_dir / "exp_periodic_comparison.csv", index=False)
+    axs[1].plot(bits_grid, et_bits, marker="o", label="ET")
+    axs[1].plot(bits_grid, per_bits, marker="s", label="PER")
+    axs[1].set_title("Quantization")
+    axs[1].set_xlabel("bits/value")
+    axs[1].grid(True, alpha=0.3)
+    axs[1].invert_xaxis()  # fewer bits to the right in IEEE figures often confusing; invert for monotonic degradation to right? keep inverted for visual.
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.6))
-    ax.bar(
-        [0, 1],
-        [summ_et["J_mean"], summ_per["J_mean"]],
-        yerr=[summ_et["J_std"], summ_per["J_std"]],
-        capsize=4,
-    )
-    ax.set_xticks([0, 1], ["ET", f"PER\n(M={M})"])
-    ax.set_ylabel(r"Quadratic cost $J$")
-    ax.set_title("ET vs Periodic (Matched Communication)")
-    save_figure(fig, output_dir / "fig_periodic_comparison.png")
+    axs[2].plot(loss_grid, et_loss, marker="o", label="ET")
+    axs[2].plot(loss_grid, per_loss, marker="s", label="PER")
+    axs[2].set_title("Packet loss")
+    axs[2].set_xlabel("loss prob.")
+    axs[2].set_ylabel("Cost ratio")
+    axs[2].grid(True, alpha=0.3)
 
-    # -----------------------------------------
-    # (4) Robustness summary (noise/quant/loss)
-    # -----------------------------------------
-    robust_cfg = SimConfig(**asdict(base))
-    robust_cfg.mode = "robust"
-    robust_cfg.sigma_v = 0.05
-    robust_cfg.bits_per_value = 10
-    robust_cfg.p_loss_good = 0.05
-    robust_cfg.p_loss_bad = 0.30
-    robust_cfg.p_g2b = 0.02
-    robust_cfg.p_b2g = 0.20
+    axs[3].plot(mismatch_grid, et_mis, marker="o", label="ET")
+    axs[3].plot(mismatch_grid, per_mis, marker="s", label="PER")
+    axs[3].set_title("Model mismatch")
+    axs[3].set_xlabel("$\epsilon$ in $A+\epsilon I$")
+    axs[3].grid(True, alpha=0.3)
 
-    deltas = np.array([0.05, 0.1, 0.2, 0.5, 1.0])
-    rows = []
-    for d in deltas:
-        c = SimConfig(**{**asdict(robust_cfg), "delta": float(d)})
-        _, s_et = monte_carlo_single(c, policy="event", runs=30)
-        M2 = int(max(1, round(1.0 / max(1e-6, s_et["tx_rate_mean"])) ))
-        _, s_per = monte_carlo_single(c, policy="periodic", runs=30, periodic_M=M2)
-        rows.append(
-            {
-                "delta": float(d),
-                "bits_et": s_et["bits_mean"],
-                "J_et": s_et["J_mean"],
-                "J_et_std": s_et["J_std"],
-                "bits_per": s_per["bits_mean"],
-                "J_per": s_per["J_mean"],
-                "J_per_std": s_per["J_std"],
-                "M_per": int(M2),
-            }
-        )
-    df_rob = pd.DataFrame(rows).sort_values("bits_et").reset_index(drop=True)
-    df_rob.to_csv(output_dir / "exp_robustness_summary.csv", index=False)
+    # single legend
+    handles, labels = axs[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=True, bbox_to_anchor=(0.5, 1.02))
+    fig.tight_layout(pad=0.8, rect=[0, 0, 1, 0.97])
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.6))
-    ax.errorbar(df_rob["bits_et"], df_rob["J_et"], yerr=df_rob["J_et_std"], marker="o", linestyle="-", capsize=3, label="ET")
-    ax.errorbar(df_rob["bits_per"], df_rob["J_per"], yerr=df_rob["J_per_std"], marker="s", linestyle="-", capsize=3, label="PER (matched)")
-    ax.set_xlabel("Total transmitted bits")
-    ax.set_ylabel(r"Quadratic cost $J$")
-    ax.set_title("Robustness: Noise + Quantization + Bursty Loss")
-    ax.legend()
-    save_figure(fig, output_dir / "fig_robustness_summary.png")
+    savefig(fig, outdir, "fig_D_robustness_panel")
+    plt.close(fig)
 
-    print(
-        "Saved 4 paper figures:",
-        "fig_pareto_tradeoff, fig_time_response, fig_periodic_comparison, fig_robustness_summary",
-    )
+def run_all(outdir: str = "result") -> None:
+    outdir = Path(outdir)
+    # 1) figure A,B,C use theory baseline for clean narrative, but keep sigma_w>0
+    cfg_theory = SimConfig()
+    cfg_theory.mode = "theory"
+    cfg_theory.sigma_w = max(cfg_theory.sigma_w, 0.02)
+
+    delta_knee, budget_knee = figure_A_pareto(cfg_theory, outdir)
+    figure_B_time_response(cfg_theory, outdir, delta_knee)
+    figure_C_budget_curves(cfg_theory, outdir)
+
+    # 2) figure D robustness uses robust mode and budget picked from theory knee as a concrete operating point
+    cfg_robust = SimConfig(**cfg_theory.__dict__)
+    cfg_robust.mode = "robust"
+    cfg_robust.sigma_v = 0.03
+    cfg_robust.bits_per_value = 10
+    cfg_robust.loss_good = 0.05
+    cfg_robust.loss_bad = 0.20
+    cfg_robust.mismatch_eps = 0.02
+    figure_D_robustness_panel(cfg_robust, outdir, budget_bits=budget_knee)
+
