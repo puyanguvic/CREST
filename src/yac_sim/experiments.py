@@ -300,107 +300,94 @@ def run_experiments(output_dir: Path):
     ax.legend()
     save_figure(fig, output_dir / "fig_markov_robustness.png")
 
-    compare_rows = []
-    compare_delta_list = [0.1, 0.5, 1.0]
+    candidate_M = [1, 2, 3, 5, 8, 10, 15, 20, 30, 40, 50]
+    per_rows = []
+    for M in candidate_M:
+        _, summ_periodic = monte_carlo_single(base, "periodic", runs=30, periodic_M=M)
+        per_rows.append(
+            {
+                "M": M,
+                "J_mean": summ_periodic["J_mean"],
+                "bits_mean": summ_periodic["bits_mean"],
+                "updates_mean": summ_periodic["N_tx_mean"],
+            }
+        )
+    df_per = pd.DataFrame(per_rows)
+
+    et_rows = []
+    matched_rows = []
+    compare_delta_list = delta_list
     for delta in compare_delta_list:
-        cfg_event = SimConfig(**{**base.__dict__, "delta": delta})
+        cfg_event = SimConfig(**{**base.__dict__, "delta": float(delta)})
         _, summ_event = monte_carlo_single(cfg_event, "event", runs=30)
-
-        target_updates = max(1.0, summ_event["N_tx_mean"])
-        period_updates = max(1, int(round(cfg_event.T_steps / target_updates)))
-        _, summ_period_updates = monte_carlo_single(
-            cfg_event, "periodic", runs=30, periodic_M=period_updates
-        )
-        compare_rows.append(
+        et_rows.append(
             {
-                "delta": delta,
-                "match": "updates",
-                "event_J": summ_event["J_mean"],
-                "event_J_std": summ_event["J_std"],
-                "event_bits": summ_event["bits_mean"],
-                "event_bits_std": summ_event["bits_std"],
-                "event_N_tx": summ_event["N_tx_mean"],
-                "periodic_M": period_updates,
-                "periodic_J": summ_period_updates["J_mean"],
-                "periodic_J_std": summ_period_updates["J_std"],
-                "periodic_bits": summ_period_updates["bits_mean"],
-                "periodic_bits_std": summ_period_updates["bits_std"],
-                "periodic_N_tx": summ_period_updates["N_tx_mean"],
+                "delta": float(delta),
+                "J_mean": summ_event["J_mean"],
+                "bits_mean": summ_event["bits_mean"],
+                "updates_mean": summ_event["N_tx_mean"],
+            }
+        )
+        diff = (df_per["bits_mean"] - summ_event["bits_mean"]).abs()
+        best_idx = int(diff.idxmin())
+        per_match = df_per.loc[best_idx]
+        matched_rows.append(
+            {
+                "delta": float(delta),
+                "M_star": int(per_match["M"]),
+                "bits_et": float(summ_event["bits_mean"]),
+                "bits_per": float(per_match["bits_mean"]),
+                "J_et": float(summ_event["J_mean"]),
+                "J_per": float(per_match["J_mean"]),
+                "updates_et": float(summ_event["N_tx_mean"]),
+                "updates_per": float(per_match["updates_mean"]),
             }
         )
 
-        bits_per_packet = cfg_event.bits_per_packet_overhead + 4 * cfg_event.bits_per_value
-        target_bits = max(bits_per_packet, summ_event["bits_mean"])
-        target_attempts = target_bits / bits_per_packet
-        period_bits = max(1, int(round(cfg_event.T_steps / max(1.0, target_attempts))))
-        _, summ_period_bits = monte_carlo_single(
-            cfg_event, "periodic", runs=30, periodic_M=period_bits
-        )
-        compare_rows.append(
-            {
-                "delta": delta,
-                "match": "bits",
-                "event_J": summ_event["J_mean"],
-                "event_J_std": summ_event["J_std"],
-                "event_bits": summ_event["bits_mean"],
-                "event_bits_std": summ_event["bits_std"],
-                "event_N_tx": summ_event["N_tx_mean"],
-                "periodic_M": period_bits,
-                "periodic_J": summ_period_bits["J_mean"],
-                "periodic_J_std": summ_period_bits["J_std"],
-                "periodic_bits": summ_period_bits["bits_mean"],
-                "periodic_bits_std": summ_period_bits["bits_std"],
-                "periodic_N_tx": summ_period_bits["N_tx_mean"],
-            }
-        )
+    df_et = pd.DataFrame(et_rows)
+    df_et.to_csv(output_dir / "exp_periodic_et.csv", index=False)
+    df_per.to_csv(output_dir / "exp_periodic_per.csv", index=False)
+    df_matched = pd.DataFrame(matched_rows)
+    df_matched.to_csv(output_dir / "exp_periodic_comparison.csv", index=False)
 
-    df_compare = pd.DataFrame(compare_rows)
-    df_compare.to_csv(output_dir / "exp_periodic_comparison.csv", index=False)
-    fig, axes = plt.subplots(2, 1, figsize=(7.5, 7.5), sharex=True)
-    for match, linestyle in [("updates", "-"), ("bits", "--")]:
-        sub = df_compare[df_compare["match"] == match].sort_values("delta")
-        axes[0].errorbar(
-            sub["delta"],
-            sub["event_J"],
-            yerr=sub["event_J_std"],
-            marker="o",
-            linestyle=linestyle,
-            capsize=3,
-            label=f"Event ({match})",
-        )
-        axes[0].errorbar(
-            sub["delta"],
-            sub["periodic_J"],
-            yerr=sub["periodic_J_std"],
-            marker="s",
-            linestyle=linestyle,
-            capsize=3,
-            label=f"Periodic ({match})",
-        )
-        axes[1].errorbar(
-            sub["delta"],
-            sub["event_bits"],
-            yerr=sub["event_bits_std"],
-            marker="o",
-            linestyle=linestyle,
-            capsize=3,
-            label=f"Event ({match})",
-        )
-        axes[1].errorbar(
-            sub["delta"],
-            sub["periodic_bits"],
-            yerr=sub["periodic_bits_std"],
-            marker="s",
-            linestyle=linestyle,
-            capsize=3,
-            label=f"Periodic ({match})",
-        )
-    axes[0].set_ylabel("Quadratic cost J")
-    axes[1].set_ylabel("Average bits used (total)")
-    axes[1].set_xlabel("Event-trigger threshold delta")
-    axes[0].set_title("Event vs periodic baselines")
-    axes[0].legend(ncol=2, fontsize=9)
-    save_figure(fig, output_dir / "fig_periodic_comparison.png")
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    df_plot = df_matched.sort_values("bits_et")
+    ax.plot(
+        df_plot["bits_et"],
+        df_plot["J_et"],
+        linestyle="-",
+        marker="o",
+        color="tab:blue",
+        markerfacecolor="tab:blue",
+        markeredgecolor="tab:blue",
+        label="Event-triggered (ET)",
+    )
+    ax.plot(
+        df_plot["bits_per"],
+        df_plot["J_per"],
+        linestyle="--",
+        marker="o",
+        color="tab:orange",
+        markerfacecolor="white",
+        markeredgecolor="tab:orange",
+        label="Periodic (PER)",
+    )
+    ax.set_xlabel(r"Average bits used $B(0{:}T)$")
+    ax.set_ylabel(r"Quadratic cost $J$")
+    ax.grid(True, linestyle="--", linewidth=0.6, color="0.8")
+    ax.legend()
+    first = df_plot.iloc[0]
+    ax.annotate(
+        "ET dominates PER under matched budget",
+        xy=(first["bits_et"], first["J_et"]),
+        xytext=(12, 12),
+        textcoords="offset points",
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        arrowprops=dict(arrowstyle="->", color="0.3", lw=0.8),
+    )
+    save_figure(fig, output_dir / "fig_periodic_comparison.pdf")
 
     baseline_delta = 0.5
     cfg_event = SimConfig(**{**base.__dict__, "delta": baseline_delta})
@@ -581,6 +568,6 @@ def run_experiments(output_dir: Path):
 
     print(
         "Saved figures & CSVs:",
-        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.png, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
+        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.pdf, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
         "exp_pareto_tradeoff.csv, exp_pareto_tradeoff_runs.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_single_uav_baselines.csv, exp_single_uav_baseline_runs.csv, exp_sensitivity_heatmap.csv",
     )

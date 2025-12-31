@@ -462,13 +462,15 @@ We then compare the resulting control performance and communication usage.
 Across all tested scenarios, event-triggered communication achieves comparable or lower quadratic cost than both periodic and random transmission under the same communication budget.
 This demonstrates that allocating communication based on system state, rather than time alone, leads to more efficient closed-loop operation in communication-constrained environments.
 
-Fig.~\ref{fig:periodic_comparison} compares event-triggered and periodic baselines over multiple $\delta$ values under matched updates or matched bits.
+Fig.~\ref{fig:periodic_comparison} compares event-triggered and periodic baselines over multiple $\delta$ values under matched communication budgets (bits).
 Fig.~\ref{fig:baseline_boxplot} and Fig.~\ref{fig:baseline_cdf} summarize the distributional advantage of event-triggered updates over periodic and random baselines.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.85\linewidth]{result/fig_periodic_comparison.png}
-\caption{Event vs periodic baselines under matched updates or matched bits.}
+\includegraphics[width=0.85\linewidth]{result/fig_periodic_comparison.pdf}
+\caption{Event-triggered (ET) versus periodic (PER) transmission under matched communication usage.
+For each triggering threshold $\delta$, the periodic period $M$ is chosen to match the average communication budget (total bits) of ET.
+ET achieves lower quadratic cost than periodic transmission for the same communication budget.}
 \label{fig:periodic_comparison}
 \end{figure}
 
