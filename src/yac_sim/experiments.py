@@ -33,6 +33,12 @@ def savefig(fig, outdir: Path, name: str) -> None:
     fig.savefig(outdir / f"{name}.pdf", bbox_inches="tight")
     fig.savefig(outdir / f"{name}.png", dpi=300, bbox_inches="tight")
 
+def _offset_x(x: np.ndarray, frac: float) -> np.ndarray:
+    span = float(np.max(x) - np.min(x)) if x.size else 0.0
+    if span == 0.0:
+        span = max(float(np.max(x)) if x.size else 0.0, 1.0)
+    return x + frac * span
+
 def _prep_tradeoff_data(et_res, per_res, rand_res):
     # mean+ci arrays
     def summarize(res_list, xkey="bits_deliv"):
@@ -71,9 +77,27 @@ def figure_A_pareto(cfg: SimConfig, outdir: Path) -> tuple[float, float]:
 
     fig = plt.figure(figsize=(3.5, 2.4))
     ax = fig.add_subplot(111)
-    ax.errorbar(x_et, y_et, yerr=ci_et, fmt="o-", capsize=2, label=r"ET (sweep $\delta$)")
-    ax.errorbar(x_per, y_per, yerr=ci_per, fmt="s-", capsize=2, label="PER (sweep $M$)")
-    ax.errorbar(x_rd, y_rd, yerr=ci_rd, fmt="^-", capsize=2, label="RAND (sweep $p$)")
+    # Slight x-offsets separate overlapping curves without altering ordering.
+    x_per_plot = _offset_x(x_per, -0.012)
+    x_rd_plot = _offset_x(x_rd, 0.012)
+    ax.errorbar(
+        x_et, y_et, yerr=ci_et, fmt="o-",
+        capsize=2, elinewidth=0.7, alpha=0.9,
+        markerfacecolor="white", markeredgewidth=0.7,
+        label=r"ET (sweep $\delta$)", zorder=3,
+    )
+    ax.errorbar(
+        x_per_plot, y_per, yerr=ci_per, fmt="s--",
+        capsize=2, elinewidth=0.7, alpha=0.9,
+        markerfacecolor="white", markeredgewidth=0.7,
+        label="PER (sweep $M$)", zorder=2,
+    )
+    ax.errorbar(
+        x_rd_plot, y_rd, yerr=ci_rd, fmt="^:",
+        capsize=2, elinewidth=0.7, alpha=0.9,
+        markerfacecolor="white", markeredgewidth=0.7,
+        label="RAND (sweep $p$)", zorder=1,
+    )
     ax.plot([budget_knee], [y_et[knee_idx]], marker="D", linestyle="None", markersize=5, label="ET knee")
 
     ax.set_xlabel("Delivered communication (bits)")
@@ -82,6 +106,7 @@ def figure_A_pareto(cfg: SimConfig, outdir: Path) -> tuple[float, float]:
     ax.legend(loc="best", frameon=True, borderpad=0.3)
     ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.margins(x=0.04)
 
     savefig(fig, outdir, "fig_A_pareto_tradeoff")
     plt.close(fig)
@@ -158,15 +183,33 @@ def figure_C_budget_curves(cfg: SimConfig, outdir: Path) -> None:
 
     fig = plt.figure(figsize=(3.5, 2.2))
     ax = fig.add_subplot(111)
-    ax.errorbar(x_et, y_etn, yerr=ci_etn, fmt="o-", capsize=2, label="ET")
-    ax.errorbar(x_per, y_pern, yerr=ci_pern, fmt="s-", capsize=2, label="PER")
-    ax.errorbar(x_rd, y_rdn, yerr=ci_rdn, fmt="^-", capsize=2, label="RAND")
+    x_per_plot = _offset_x(x_per, -0.012)
+    x_rd_plot = _offset_x(x_rd, 0.012)
+    ax.errorbar(
+        x_et, y_etn, yerr=ci_etn, fmt="o-",
+        capsize=2, elinewidth=0.7, alpha=0.9,
+        markerfacecolor="white", markeredgewidth=0.7,
+        label="ET", zorder=3,
+    )
+    ax.errorbar(
+        x_per_plot, y_pern, yerr=ci_pern, fmt="s--",
+        capsize=2, elinewidth=0.7, alpha=0.9,
+        markerfacecolor="white", markeredgewidth=0.7,
+        label="PER", zorder=2,
+    )
+    ax.errorbar(
+        x_rd_plot, y_rdn, yerr=ci_rdn, fmt="^:",
+        capsize=2, elinewidth=0.7, alpha=0.9,
+        markerfacecolor="white", markeredgewidth=0.7,
+        label="RAND", zorder=1,
+    )
     ax.set_xlabel("Delivered communication (bits)")
     ax.set_ylabel("Normalized cost $J/J_{PER,M=1}$")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best", frameon=True, borderpad=0.3)
     ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
     ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.margins(x=0.04)
 
     savefig(fig, outdir, "fig_C_budget_curves")
     plt.close(fig)
