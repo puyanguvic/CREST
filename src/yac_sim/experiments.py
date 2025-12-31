@@ -164,40 +164,32 @@ def run_experiments(output_dir: Path):
     axes[1].set_xscale("log")
     save_figure(fig, output_dir / "fig_quantile_band.png")
 
-    time_delta_list = [
-        float(delta_list[0]),
-        float(delta_list[len(delta_list) // 2]),
-        float(delta_list[-1]),
-    ]
-    time_rows = []
-    fig, axes = plt.subplots(len(time_delta_list), 1, figsize=(8, 8), sharex=True)
-    if len(time_delta_list) == 1:
-        axes = [axes]
-    for ax, delta in zip(axes, time_delta_list):
-        cfg = SimConfig(**{**base.__dict__, "delta": delta})
-        df, _ = simulate_single_uav(cfg, "event")
-        df = df.copy()
-        df["delta"] = delta
-        time_rows.append(df[["k", "delta", "tilde_norm", "x_norm", "tx"]])
+    delta_mid = float(delta_list[len(delta_list) // 2])
+    cfg = SimConfig(**{**base.__dict__, "delta": delta_mid})
+    df, _ = simulate_single_uav(cfg, "event")
+    df = df.copy()
+    df["delta"] = delta_mid
 
-        ax.plot(df["k"], df["tilde_norm"], label="||tilde_x||", color="tab:blue")
-        ax.plot(df["k"], df["x_norm"], label="||x||", linestyle="--", color="tab:orange")
-        ax.axhline(delta, color="k", linestyle=":", linewidth=1.0, label="delta")
-        ax.scatter(
-            df.loc[df["tx"] == 1, "k"],
-            [0.0] * int(df["tx"].sum()),
-            s=18,
-            alpha=0.6,
-            marker="|",
-            color="tab:green",
-            label="tx",
-        )
-        ax.set_ylabel("norm")
-        ax.set_title(f"time response (delta={delta:.3f})")
-        ax.grid(True)
-    axes[-1].set_xlabel("time step k")
-    axes[0].legend(loc="upper right", ncol=2)
-    save_figure(fig, output_dir / "fig_time_response.png")
+    time_rows = [df[["k", "delta", "tilde_norm", "x_norm", "tx"]]]
+
+    fig, axes = plt.subplots(2, 1, figsize=(7.5, 6.5), sharex=True)
+    ax_err, ax_state = axes
+    ax_err.plot(df["k"], df["tilde_norm"], linestyle="-")
+    ax_err.axhline(delta_mid, linestyle="--", linewidth=1.0)
+    trigger_steps = df.loc[df["tx"] == 1, "k"].to_numpy()
+    for k in trigger_steps:
+        ax_err.axvline(k, linestyle="--", linewidth=0.7, color="0.7")
+    ax_err.set_ylabel(r"$\|\tilde{x}_k\|_2$")
+    ax_err.set_title("(a) Prediction error (grow-and-reset)")
+    ax_err.grid(True, linestyle="--", linewidth=0.6, color="0.8")
+
+    ax_state.plot(df["k"], df["x_norm"], linestyle="-")
+    ax_state.set_xlabel(r"Time step $k$")
+    ax_state.set_ylabel(r"$\|x_k\|_2$")
+    ax_state.set_title("(b) Closed-loop state response")
+    ax_state.grid(True, linestyle="--", linewidth=0.6, color="0.8")
+
+    save_figure(fig, output_dir / "fig_time_response.pdf")
 
     if time_rows:
         df_time = pd.concat(time_rows, ignore_index=True)
@@ -568,6 +560,6 @@ def run_experiments(output_dir: Path):
 
     print(
         "Saved figures & CSVs:",
-        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.png, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.pdf, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
+        "fig_pareto_tradeoff.png, fig_quantile_band.png, fig_time_response.pdf, fig_quant_tradeoff.png, fig_budget_tradeoff.png, fig_markov_robustness.png, fig_periodic_comparison.pdf, fig_single_uav_baselines.png, fig_single_uav_boxplot.png, fig_single_uav_scatter.png, fig_single_uav_cdf.png, fig_single_uav_radar.png, fig_sensitivity_heatmap.png",
         "exp_pareto_tradeoff.csv, exp_pareto_tradeoff_runs.csv, exp_time_response.csv, exp_quant_tradeoff.csv, exp_budget_tradeoff.csv, exp_markov_robustness.csv, exp_periodic_comparison.csv, exp_single_uav_baselines.csv, exp_single_uav_baseline_runs.csv, exp_sensitivity_heatmap.csv",
     )

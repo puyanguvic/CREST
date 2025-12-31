@@ -388,21 +388,21 @@ Each point corresponds to a different $\delta$, illustrating a clear trade-off b
 This experiment visualizes the time-domain behavior of the prediction error and the closed-loop state, providing insight into the grow-and-reset mechanism underlying the stability result in Theorem~\ref{thm:main}.
 
 \textbf{Protocol.}
-We select three representative triggering thresholds from Experiment~1, corresponding to small, medium, and large communication rates.
-For each case, we record the prediction error norm $\|\tilde{x}_k\|_2$, the system state norm $\|x_k\|_2$, and the triggering instants $\{k:\gamma_k=1\}$ during a single mission rollout.
+We select a representative mid-range triggering threshold from Experiment~1.
+For this case, we record the prediction error norm $\|\tilde{x}_k\|_2$, the system state norm $\|x_k\|_2$, and the triggering instants $\{k:\gamma_k=1\}$ during a single mission rollout.
 
 \textbf{Results.}
-Fig.~\ref{fig:time_response} illustrates the evolution of $\|\tilde{x}_k\|_2$ over time together with the triggering threshold $\delta$.
-When no update is delivered, the controller operates on model-based prediction and the prediction error grows according to the plant dynamics.
-Once $\|\tilde{x}_k\|_2$ exceeds $\delta$, a state update is triggered, resetting the error to zero.
-
-This grow-and-reset behavior prevents unbounded error accumulation and induces ultimate boundedness of the closed-loop state.
-Consistent with Theorem~\ref{thm:main}, larger values of $\delta$ lead to larger steady-state envelopes of $\|x_k\|_2$, while the closed-loop system remains practically stable.
+Fig.~\ref{fig:time_response} visualizes the grow-and-reset mechanism.
+When no update is delivered, the controller operates on model-based prediction and the prediction error grows.
+Once $\|\tilde{x}_k\|_2$ exceeds $\delta$, a state update is triggered, resetting the error.
+This behavior prevents unbounded error accumulation and keeps the closed-loop state bounded, in line with Theorem~\ref{thm:main}.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.9\linewidth]{result/fig_time_response.png}
-\caption{Time-domain grow-and-reset behavior for three representative thresholds.}
+\includegraphics[width=0.9\linewidth]{result/fig_time_response.pdf}
+\caption{Grow-and-reset mechanism in a single rollout with a representative $\delta$.
+(a) The prediction error $\|\tilde{x}_k\|_2$ grows between updates and is reset when communication is triggered.
+(b) The closed-loop state norm $\|x_k\|_2$ remains bounded under intermittent updates.}
 \label{fig:time_response}
 \end{figure}
 
