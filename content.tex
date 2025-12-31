@@ -422,6 +422,14 @@ A mission-level bit budget $B_{\max}$ is enforced; transmissions are suppressed 
 We evaluate performance under varying quantization resolutions and communication budgets.
 For each setting, we report the quadratic cost $J$, the total number of transmitted bits $B(0{:}T)$, and the tracking root-mean-square error (RMSE).
 
+To make the results easier to scan, the four sub-experiments and their figures are listed explicitly:
+\begin{itemize}
+    \item Quantization resolution sweep $\rightarrow$ Fig.~\ref{fig:quant_tradeoff}.
+    \item Bit-budget sweep $\rightarrow$ Fig.~\ref{fig:budget_tradeoff}.
+    \item Bursty Markov packet loss sweep $\rightarrow$ Fig.~\ref{fig:markov_robustness}.
+    \item Sensitivity heatmap over $(\delta, p_{\mathrm{loss}}^{B})$ $\rightarrow$ Fig.~\ref{fig:sensitivity_heatmap}.
+\end{itemize}
+
 The results show that coarser quantization and tighter bit budgets gradually degrade performance, but the closed-loop system remains practically stable across all tested conditions (Fig.~\ref{fig:quant_tradeoff} and Fig.~\ref{fig:budget_tradeoff}).
 Bursty packet losses primarily increase the inter-update intervals, yet the event-triggered mechanism adapts by allocating communication resources when the prediction error becomes significant (Fig.~\ref{fig:markov_robustness}).
 To highlight sensitivity across operating points, Fig.~\ref{fig:sensitivity_heatmap} visualizes the RMS error over a grid of $\delta$ and bursty-loss severity, indicating smooth degradation rather than abrupt failure.

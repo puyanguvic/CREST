@@ -83,11 +83,20 @@ def run_experiments(output_dir: Path):
             path.unlink()
     apply_plot_style()
     base = SimConfig()
+    step = 0
+    total_steps = 14
+
+    def log_step(title: str) -> None:
+        nonlocal step
+        step += 1
+        print(f"[{step:02d}/{total_steps:02d}] {title}")
 
     delta_list = np.array([1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1, 1.0, 3.0, 10.0])
     pareto_rows = []
     pareto_runs = []
-    for delta in delta_list:
+    log_step("Pareto sweep: event-triggered threshold")
+    for idx, delta in enumerate(delta_list, start=1):
+        print(f"  delta {idx}/{len(delta_list)} = {delta}")
         cfg = SimConfig(**{**base.__dict__, "delta": delta})
         df_runs, summ = monte_carlo_single(cfg, "event", runs=30)
         pareto_rows.append(
@@ -109,6 +118,7 @@ def run_experiments(output_dir: Path):
     df_pareto_runs = pd.concat(pareto_runs, ignore_index=True)
     df_pareto_runs.to_csv(output_dir / "exp_pareto_tradeoff_runs.csv", index=False)
 
+    log_step("Pareto plot")
     fig, ax = plt.subplots(figsize=(7, 4.5))
     df_plot = df_pareto.sort_values("N_tx_mean")
     x_vals = df_plot["N_tx_mean"].to_numpy()
@@ -141,6 +151,7 @@ def run_experiments(output_dir: Path):
     )
     save_figure(fig, output_dir / "fig_pareto_tradeoff.png")
 
+    log_step("Quantile bands across runs")
     grouped = df_pareto_runs.groupby("delta", as_index=False)
     q = grouped.agg(
         J_q25=("J_cost", lambda s: np.quantile(s, 0.25)),
@@ -164,6 +175,7 @@ def run_experiments(output_dir: Path):
     axes[1].set_xscale("log")
     save_figure(fig, output_dir / "fig_quantile_band.png")
 
+    log_step("Time-domain single rollout")
     delta_mid = float(delta_list[len(delta_list) // 2])
     cfg = SimConfig(**{**base.__dict__, "delta": delta_mid})
     df, _ = simulate_single_uav(cfg, "event")
@@ -197,13 +209,16 @@ def run_experiments(output_dir: Path):
 
     bits_list = [4, 6, 8, 10, 12]
     rows = []
-    for b in bits_list:
+    log_step("Quantization sweep")
+    for idx, b in enumerate(bits_list, start=1):
+        print(f"  bits {idx}/{len(bits_list)} = {b}")
         cfg = SimConfig(**{**base.__dict__, "bits_per_value": b, "delta": 0.5})
         _, summ = monte_carlo_single(cfg, "event", runs=30)
         rows.append({"bits_per_value": b, **summ})
     df_q = pd.DataFrame(rows)
     df_q.to_csv(output_dir / "exp_quant_tradeoff.csv", index=False)
 
+    log_step("Quantization trade-off plot")
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.errorbar(
         df_q["bits_mean"],
@@ -221,7 +236,9 @@ def run_experiments(output_dir: Path):
 
     budget_list = [200_000, 500_000, 1_000_000, 2_000_000]
     budget_rows = []
-    for budget in budget_list:
+    log_step("Budget sweep")
+    for idx, budget in enumerate(budget_list, start=1):
+        print(f"  budget {idx}/{len(budget_list)} = {budget}")
         cfg = SimConfig(**{**base.__dict__, "bit_budget_total": budget, "delta": 0.5})
         _, summ = monte_carlo_single(cfg, "event", runs=30)
         budget_rows.append(
@@ -237,6 +254,7 @@ def run_experiments(output_dir: Path):
     df_budget = pd.DataFrame(budget_rows)
     df_budget.to_csv(output_dir / "exp_budget_tradeoff.csv", index=False)
 
+    log_step("Budget trade-off plot")
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.errorbar(
         df_budget["bits_mean"],
@@ -255,8 +273,13 @@ def run_experiments(output_dir: Path):
     p_bad_list = [0.3, 0.5, 0.7]
     burst_list = [(0.01, 0.2), (0.02, 0.1), (0.05, 0.05)]
     rob_rows = []
-    for p_bad in p_bad_list:
-        for (p_g2b, p_b2g) in burst_list:
+    log_step("Markov loss sweep")
+    for i, p_bad in enumerate(p_bad_list, start=1):
+        for j, (p_g2b, p_b2g) in enumerate(burst_list, start=1):
+            print(
+                f"  p_bad {i}/{len(p_bad_list)} = {p_bad}, "
+                f"burst {j}/{len(burst_list)} = ({p_g2b}, {p_b2g})"
+            )
             cfg = SimConfig(
                 **{
                     **base.__dict__,
@@ -272,6 +295,7 @@ def run_experiments(output_dir: Path):
     df_rob = pd.DataFrame(rob_rows)
     df_rob.to_csv(output_dir / "exp_markov_robustness.csv", index=False)
 
+    log_step("Markov robustness plot")
     fig, ax = plt.subplots(figsize=(7, 4.5))
     sub = df_rob[df_rob["p_loss_bad"] == 0.5].copy()
     sub["burst_len_proxy"] = 1.0 / (sub["p_b2g"] + 1e-12)
@@ -295,7 +319,9 @@ def run_experiments(output_dir: Path):
     robust_delta_list = delta_list[:8]
     robust_M_list = [1, 2, 3, 5, 8, 10, 15, 20, 30, 40]
     robust_rows = []
-    for delta in robust_delta_list:
+    log_step("Robustness summary sweep (ET/PER)")
+    for idx, delta in enumerate(robust_delta_list, start=1):
+        print(f"  ET delta {idx}/{len(robust_delta_list)} = {float(delta)}")
         cfg_event = SimConfig(
             **{
                 **base.__dict__,
@@ -317,7 +343,8 @@ def run_experiments(output_dir: Path):
                 "J_mean": summ_event["J_mean"],
             }
         )
-    for M in robust_M_list:
+    for idx, M in enumerate(robust_M_list, start=1):
+        print(f"  PER M {idx}/{len(robust_M_list)} = {M}")
         cfg_per = SimConfig(
             **{
                 **base.__dict__,
@@ -342,6 +369,7 @@ def run_experiments(output_dir: Path):
     df_robust.to_csv(output_dir / "exp_robustness_summary.csv", index=False)
     df_et = df_robust[df_robust["scheme"] == "ET"].sort_values("bits_mean")
     df_per = df_robust[df_robust["scheme"] == "PER"].sort_values("bits_mean")
+    log_step("Robustness summary plot")
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.plot(
         df_et["bits_mean"],
@@ -366,7 +394,9 @@ def run_experiments(output_dir: Path):
 
     candidate_M = [1, 2, 3, 5, 8, 10, 15, 20, 30, 40, 50]
     per_rows = []
-    for M in candidate_M:
+    log_step("Periodic baseline sweep")
+    for idx, M in enumerate(candidate_M, start=1):
+        print(f"  M {idx}/{len(candidate_M)} = {M}")
         _, summ_periodic = monte_carlo_single(base, "periodic", runs=30, periodic_M=M)
         per_rows.append(
             {
@@ -381,7 +411,9 @@ def run_experiments(output_dir: Path):
     et_rows = []
     matched_rows = []
     compare_delta_list = delta_list
-    for delta in compare_delta_list:
+    log_step("ET vs PER matched budget sweep")
+    for idx, delta in enumerate(compare_delta_list, start=1):
+        print(f"  delta {idx}/{len(compare_delta_list)} = {float(delta)}")
         cfg_event = SimConfig(**{**base.__dict__, "delta": float(delta)})
         _, summ_event = monte_carlo_single(cfg_event, "event", runs=30)
         et_rows.append(
@@ -414,6 +446,7 @@ def run_experiments(output_dir: Path):
     df_matched = pd.DataFrame(matched_rows)
     df_matched.to_csv(output_dir / "exp_periodic_comparison.csv", index=False)
 
+    log_step("ET vs PER matched budget plot")
     fig, ax = plt.subplots(figsize=(7, 4.5))
     df_plot = df_matched.sort_values("bits_et")
     ax.plot(
@@ -462,6 +495,7 @@ def run_experiments(output_dir: Path):
 
     base_rows = []
     base_runs = []
+    log_step("Baseline policy comparisons")
     for policy, kwargs in [
         ("event", {}),
         ("periodic", {"periodic_M": periodic_M}),
@@ -485,6 +519,7 @@ def run_experiments(output_dir: Path):
     df_runs = pd.concat(base_runs, ignore_index=True)
     df_runs.to_csv(output_dir / "exp_single_uav_baseline_runs.csv", index=False)
 
+    log_step("Baseline bar charts")
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True)
     labels = df_base["policy"].str.capitalize()
     x = np.arange(len(df_base))
@@ -503,6 +538,7 @@ def run_experiments(output_dir: Path):
         ax.grid(axis="y")
     save_figure(fig, output_dir / "fig_single_uav_baselines.png")
 
+    log_step("Baseline boxplots")
     fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=False)
     policies = ["event", "periodic", "random"]
     labels = [p.capitalize() for p in policies]
@@ -522,6 +558,7 @@ def run_experiments(output_dir: Path):
         ax.grid(axis="y")
     save_figure(fig, output_dir / "fig_single_uav_boxplot.png")
 
+    log_step("Baseline scatter plot")
     fig, ax = plt.subplots(figsize=(7, 4.8))
     for policy, marker in [("event", "o"), ("periodic", "s"), ("random", "^")]:
         sub = df_runs[df_runs["policy"] == policy]
@@ -542,6 +579,7 @@ def run_experiments(output_dir: Path):
     ax.legend()
     save_figure(fig, output_dir / "fig_single_uav_scatter.png")
 
+    log_step("Baseline CDF plots")
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     for policy in ["event", "periodic", "random"]:
         sub = df_runs[df_runs["policy"] == policy]
@@ -591,8 +629,13 @@ def run_experiments(output_dir: Path):
     heat_pbad = [0.1, 0.3, 0.5, 0.7, 0.9]
     heat_rows = []
     heat_grid = np.zeros((len(heat_pbad), len(heat_delta)))
-    for i, p_bad in enumerate(heat_pbad):
-        for j, delta in enumerate(heat_delta):
+    log_step("Sensitivity heatmap sweep")
+    for i, p_bad in enumerate(heat_pbad, start=1):
+        for j, delta in enumerate(heat_delta, start=1):
+            print(
+                f"  p_bad {i}/{len(heat_pbad)} = {float(p_bad)}, "
+                f"delta {j}/{len(heat_delta)} = {float(delta)}"
+            )
             cfg = SimConfig(
                 **{
                     **base.__dict__,
@@ -617,6 +660,7 @@ def run_experiments(output_dir: Path):
     df_heat = pd.DataFrame(heat_rows)
     df_heat.to_csv(output_dir / "exp_sensitivity_heatmap.csv", index=False)
 
+    log_step("Sensitivity heatmap plot")
     fig, ax = plt.subplots(figsize=(7.5, 4.8))
     im = ax.imshow(heat_grid, cmap="viridis", aspect="auto")
     ax.set_xticks(np.arange(len(heat_delta)))
