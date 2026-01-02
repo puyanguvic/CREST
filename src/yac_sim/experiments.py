@@ -46,7 +46,7 @@ def _prep_tradeoff_data(et_res, per_res, rand_res, *, y_transform: str | None = 
       - None: use J in linear scale.
       - "log10": use log10(J) and compute CI in log domain (more robust for heavy-tail).
     """
-    def summarize(res_list, xkey="bits_deliv"):
+    def summarize(res_list, xkey="N_deliv"):
         xs, ys, yci = [], [], []
         for r in res_list:
             x_m, _ = mean_ci95(r[xkey])
@@ -68,7 +68,7 @@ def _prep_tradeoff_data(et_res, per_res, rand_res, *, y_transform: str | None = 
 
 
 def figure_A_pareto(cfg: SimConfig, outdir: Path) -> tuple[float, float]:
-    """Figure A: Pareto with multiple baselines + CI + knee. Returns (delta_knee, budget_knee_bits)."""
+    """Figure A: Pareto with multiple baselines + CI + knee. Returns (delta_knee, budget_knee_packets)."""
     apply_ieee_style()
 
     # Sweeps
@@ -78,13 +78,19 @@ def figure_A_pareto(cfg: SimConfig, outdir: Path) -> tuple[float, float]:
 
     et_res = monte_carlo(cfg, "ET", deltas=deltas)
     per_res = monte_carlo(cfg, "PER", periods=periods)
-    rd_res = monte_carlo(cfg, "RAND", ps=ps)
+    rd_res = monte_carlo(cfg, "RAND", random_ps=ps)
 
-    (x_et, y_et, ci_et), (x_per, y_per, ci_per), (x_rd, y_rd, ci_rd) = _prep_tradeoff_data(et_res, per_res, rd_res, y_transform="log10")
+    (x_et, y_et, ci_et), (x_per, y_per, ci_per), (x_rd, y_rd, ci_rd) = _prep_tradeoff_data(
+        et_res, per_res, rd_res, y_transform="log10"
+    )
 
-    # knee on ET curve in (bits, cost)
+    # knee on ET curve in (packets, cost)
     knee_idx = knee_point(x_et, y_et)
-    delta_knee = float(np.array(deltas)[np.argsort(x_et)][knee_idx]) if len(deltas)==len(x_et) else float(deltas[knee_idx])
+    # Map knee point back to corresponding delta in ET sweep (using the same sorting as x_et).
+    et_x_means = np.asarray([mean_ci95(r['N_deliv'])[0] for r in et_res], dtype=float)
+    et_order = np.argsort(et_x_means)
+    et_params_sorted = np.asarray([r['param'] for r in et_res], dtype=float)[et_order]
+    delta_knee = float(et_params_sorted[knee_idx])
     budget_knee = float(x_et[knee_idx])
 
     fig = plt.figure(figsize=(3.5, 2.4))
@@ -125,18 +131,24 @@ def figure_A_pareto(cfg: SimConfig, outdir: Path) -> tuple[float, float]:
     return delta_knee, budget_knee
 
 def figure_B_time_response(cfg: SimConfig, outdir: Path, delta_knee: float) -> None:
-    """Figure B: time response with tx markers + inset zoom."""
+    """Figure B: time-domain visualization of the grow-and-reset / contraction mechanism.
+
+    - Top: prediction error norm ||\tilde x_k|| with vertical markers indicating delivered updates.
+    - Bottom: cumulative delivered uplink packets (staircase).
+    Inset: innovation ||y_k - C xhat^-_k|| and the threshold δ (triggering quantity).
+    """
     apply_ieee_style()
 
     cfg1 = SimConfig(**cfg.__dict__)
     cfg1.delta = float(delta_knee)
-    # a single representative run (fixed seed for reproducibility)
-    rng = np.random.default_rng(cfg.seed + 123)
+
+    rng = np.random.default_rng(int(cfg.seed) + 123)  # reproducible representative run
     out = simulate(cfg1, "ET", rng=rng)
 
-    x_norm = out["x_norm"]
-    e_norm = out["tilde_pred_norm"]
+    e_tilde = out["tilde_x_norm"]
+    innov = out["innovation_norm"]
     tx = out["tx_deliv"]
+    cum_pkts = np.cumsum(tx)
 
     t = np.arange(cfg1.T_steps) * cfg1.Ts
 
@@ -144,35 +156,30 @@ def figure_B_time_response(cfg: SimConfig, outdir: Path, delta_knee: float) -> N
     ax1 = fig.add_subplot(211)
     ax2 = fig.add_subplot(212, sharex=ax1)
 
-    ax1.plot(t, x_norm, label=r"$\|x_k\|_2$")
-    ax1.set_ylabel(r"$\|x_k\|_2$")
+    ax1.plot(t, e_tilde, label=r"$\|\tilde x_k\|_2$")
+    idx = np.where(tx > 0)[0]
+    if idx.size > 0:
+        ax1.vlines(t[idx], ymin=0, ymax=np.minimum(e_tilde[idx], np.max(e_tilde)), linewidth=0.6, alpha=0.6)
+
+    ax1.set_ylabel(r"$\|\tilde x_k\|_2$")
     ax1.grid(True, alpha=0.3)
     ax1.legend(loc="best", frameon=True, borderpad=0.3)
 
-    ax2.plot(t, e_norm, label=r"$\|\tilde{x}_k^{pred}\|_2$")
-    ax2.axhline(cfg1.delta, linestyle="--", linewidth=0.9, label=r"$\delta$")
-    # tx markers at bottom
-    idx = np.where(tx > 0)[0]
-    if idx.size > 0:
-        ax2.vlines(t[idx], ymin=0, ymax=np.minimum(e_norm[idx], cfg1.delta*1.2), linewidth=0.6)
+    ax2.step(t, cum_pkts, where="post", label="Cumulative packets")
     ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Pred. error norm")
+    ax2.set_ylabel("Packets")
     ax2.grid(True, alpha=0.3)
     ax2.legend(loc="best", frameon=True, borderpad=0.3)
 
-    # inset zoom on a window with events
-    if idx.size > 5:
-        k0 = int(idx[min(3, idx.size-1)])
-        a = max(k0 - 25, 0)
-        b = min(k0 + 60, cfg1.T_steps-1)
-        axins = inset_axes(ax2, width="38%", height="45%", loc="upper right", borderpad=0.8)
-        axins.plot(t[a:b], e_norm[a:b])
-        axins.axhline(cfg1.delta, linestyle="--", linewidth=0.8)
-        axins.set_xticks([]); axins.set_yticks([])
-        axins.grid(True, alpha=0.25)
+    inset = inset_axes(ax1, width="38%", height="38%", loc="upper right", borderpad=0.8)
+    inset.plot(t, innov, linewidth=0.9)
+    inset.axhline(cfg1.delta, linestyle="--", linewidth=0.8)
+    inset.set_title("innovation", fontsize=8)
+    inset.set_xticks([])
+    inset.set_yticks([])
 
+    fig.tight_layout(pad=0.3)
     savefig(fig, outdir, "fig_B_time_response")
-    plt.close(fig)
 
 def figure_C_budget_curves(cfg: SimConfig, outdir: Path) -> None:
     """Figure C: relative cost gap vs ET under matched communication budgets."""
@@ -184,13 +191,13 @@ def figure_C_budget_curves(cfg: SimConfig, outdir: Path) -> None:
 
     et_res = monte_carlo(cfg, "ET", deltas=deltas)
     per_res = monte_carlo(cfg, "PER", periods=periods)
-    rd_res = monte_carlo(cfg, "RAND", ps=ps)
+    rd_res = monte_carlo(cfg, "RAND", random_ps=ps)
 
     # Summarize curves using *median* (robust to heavy-tail runs).
     def summarize_median(res_list):
         xb, yb = [], []
         for r in res_list:
-            xb.append(np.median(r["bits_deliv"]))
+            xb.append(np.median(r["N_deliv"]))
             yb.append(np.median(r["J"]))
         xb = np.asarray(xb, dtype=float)
         yb = np.asarray(yb, dtype=float)
@@ -250,7 +257,7 @@ def _best_under_budget(curve_bits: np.ndarray, curve_J: np.ndarray, budget: floa
     idx = int(np.argmin(np.abs(curve_bits - budget)))
     return float(curve_J[idx])
 
-def figure_D_robustness_panel(cfg: SimConfig, outdir: Path, budget_bits: float) -> None:
+def figure_D_robustness_panel(cfg: SimConfig, outdir: Path, budget_packets: float) -> None:
     """Figure D: 2x2 robustness panel sweeping impairment strengths, comparing best ET vs best PER at same delivered budget."""
     apply_ieee_style()
 
@@ -271,7 +278,7 @@ def figure_D_robustness_panel(cfg: SimConfig, outdir: Path, budget_bits: float) 
         def summarize(res_list):
             xb, yb = [], []
             for r in res_list:
-                x_m, _ = mean_ci95(r["bits_deliv"])
+                x_m, _ = mean_ci95(r["N_deliv"])
                 y_m, _ = mean_ci95(r["J"])
                 xb.append(x_m); yb.append(y_m)
             xb = np.array(xb); yb = np.array(yb)
@@ -285,7 +292,7 @@ def figure_D_robustness_panel(cfg: SimConfig, outdir: Path, budget_bits: float) 
     cfg_nom = SimConfig(**cfg.__dict__)
     cfg_nom.mode = "robust"  # normalization uses same mode family as panel
     xet0, yet0, xpe0, ype0 = build_curves(cfg_nom)
-    J_ref = _best_under_budget(xpe0, ype0, budget_bits)  # reference: PER at that budget
+    J_ref = _best_under_budget(xpe0, ype0, budget_packets)  # reference: PER at that budget
 
     def eval_grid(var_name: str, grid):
         et_best = []
@@ -309,8 +316,8 @@ def figure_D_robustness_panel(cfg: SimConfig, outdir: Path, budget_bits: float) 
                 raise ValueError(var_name)
 
             xet, yet, xpe, ype = build_curves(c)
-            et_best.append(_best_under_budget(xet, yet, budget_bits) / J_ref)
-            per_best.append(_best_under_budget(xpe, ype, budget_bits) / J_ref)
+            et_best.append(_best_under_budget(xet, yet, budget_packets) / J_ref)
+            per_best.append(_best_under_budget(xpe, ype, budget_packets) / J_ref)
         return np.array(et_best), np.array(per_best)
 
     et_noise, per_noise = eval_grid("sigma_v", noise_grid)
@@ -412,4 +419,4 @@ def run_all(outdir: str = "result", mc_runs: int | None = None, t_steps: int | N
     cfg_robust.loss_good = max(cfg_robust.loss_good, 0.05)
     cfg_robust.loss_bad = max(cfg_robust.loss_bad, 0.20)
     cfg_robust.mismatch_eps = max(cfg_robust.mismatch_eps, 0.02)
-    figure_D_robustness_panel(cfg_robust, outdir, budget_bits=budget_knee)
+    figure_D_robustness_panel(cfg_robust, outdir, budget_packets=budget_knee)

@@ -18,10 +18,19 @@ class SimConfig:
     period_M: int = 10
     random_p: float = 0.1  # for random baseline
 
-    # noise / impairment
-    sigma_w: float = 0.03  # process noise (needed to make grow visible)
-    sigma_v: float = 0.00  # measurement noise
+    # disturbances / noise (paper: bounded)
+    w_bar: float = 0.06   # ||w_k||_inf bound used for sampling; paper assumes ||w_k||_2 <= w_bar (see sim_single)
+    v_bar: float = 0.00   # ||v_k||_inf bound
+    # legacy Gaussian stds (kept for backwards compatibility; ignored when mode='theory' and bounds are used)
+    sigma_w: float = 0.03
+    sigma_v: float = 0.00
     bits_per_value: int = 32
+
+    # measurement model (paper uses y = Cx + v; default is full-state)
+    C_full_state: bool = True
+
+    # observer gain (paper uses fixed L; default L = I for full-state)
+    L_gain: float = 1.0
 
     # channel (Gilbert–Elliott)
     p_good_to_bad: float =  0.03
@@ -44,9 +53,11 @@ class SimConfig:
     R_u: float = 0.1
 
     def force_theory(self) -> None:
+        """Configure idealized 'theory' mode consistent with the paper assumptions."""
         self.mode = "theory"
-        self.sigma_v = 0.0
+        self.v_bar = 0.0
         self.bits_per_value = 32
         self.loss_good = 0.0
         self.loss_bad = 0.0
         self.mismatch_eps = 0.0
+
