@@ -1,527 +1,371 @@
 \begin{abstract}
-Precision agriculture increasingly relies on unmanned systems for large-scale monitoring and autonomous operation, often under limited and intermittent wireless connectivity. In such settings, frequent state transmission can be unnecessary and wasteful. This paper studies a fundamental performance--communication trade-off in closed-loop unmanned systems with intermittent state updates. We consider a linear system controlled by a fixed LQR law and model communication as an event-triggered state update mechanism. By explicitly characterizing how intermittent updates affect closed-loop dynamics through prediction error growth and reset, we establish practical stability guarantees and reveal a tunable trade-off between quadratic control performance and communication usage. Simulation results demonstrate clear Pareto-type trade-offs, showing that substantial communication savings can be achieved with moderate performance degradation.
+Unmanned systems in precision agriculture increasingly rely on wireless communication to close the sensing-communication-control (SCC) loop. In practice, wireless links are often bandwidth-limited and intermittent, rendering periodic state transmission inefficient and overly conservative, particularly over finite mission horizons.
+
+This paper investigates a fundamental performance--communication trade-off in closed-loop unmanned systems subject to intermittent state updates. We consider a discrete-time linear system controlled by a fixed linear quadratic regulator (LQR), in which state information is delivered through an error-based event-triggered communication mechanism. Intermittent communication induces a grow-and-reset prediction-error process at the controller side, providing a transparent system-level interpretation of how communication decisions shape closed-loop dynamics. From this perspective, event-triggered communication naturally emerges as a communication-regulated endogenous input to an otherwise nominally stable system.
+
+For this setting, we establish a communication-regulated finite-time input-to-state stability (FT-ISS) characterization under bounded disturbances, in which the closed-loop state bound holds uniformly over the mission horizon and scales explicitly with the triggering threshold. This result reveals a tunable trade-off between closed-loop performance and communication usage. Simulations motivated by precision agriculture scenarios confirm that substantial communication reductions can be achieved with only moderate performance degradation.
 \end{abstract}
 
 
-\begin{IEEEkeywords}
-event-triggered control, communication-constrained systems, unmanned systems, performance--communication trade-off, networked control
-\end{IEEEkeywords}
 
+
+\begin{IEEEkeywords}
+event-triggered control, communication constraints, unmanned systems, networked control
+\end{IEEEkeywords}
 
 \section{Introduction}
 
-Unmanned systems operating over large spatial scales increasingly rely on wireless communication to close the sensing--control loop. In many practical deployments, such as precision agriculture, communication resources are scarce, intermittent, or energy-limited, while the controlled dynamics are typically smooth and slowly varying. In these settings, transmitting state information at a fixed periodic rate is often unnecessarily conservative and can lead to substantial waste of communication resources.
+In apple cultivation, timely pest and disease detection is critical to crop yield and quality. For large-scale orchards, unmanned aerial vehicles (UAVs) equipped with high-resolution and multispectral sensors are commonly deployed to collect lesion and pest information, which is transmitted via wireless links to ground stations for decision-making and control, thereby closing the sensing-communication-control (SCC) loop. However, orchard environments are characterized by complex terrain, foliage occlusion, and long operational distances, leading to bandwidth-limited and intermittent wireless communication.
 
-This paper investigates a fundamental problem in communication-constrained control systems: characterizing the trade-off between control performance and communication usage when state information is delivered intermittently.
+At the same time, UAV endurance is constrained, and periodic transmission of high-rate sensory data can be redundant, energy-intensive, and detrimental to coverage efficiency. Moreover, pest and disease symptoms typically evolve gradually relative to the sensing rate, rendering periodic state transmission overly conservative. These considerations motivate communication strategies that adapt transmission timing to the system state, rather than relying on fixed sampling schedules.
 
-To isolate this trade-off in its most transparent form, we consider a baseline yet practically relevant setting: a linear time-invariant plant controlled by a fixed LQR feedback law, with perfect state measurement but intermittent state updates delivered to the controller. Under this abstraction, communication constraints manifest exclusively through the growth of the controller-side prediction error between updates. This allows communication to be modeled as an error reset mechanism acting on an otherwise nominally stable closed-loop system, yielding a clean and analytically tractable structure.
+Unmanned systems operating over large spatial scales increasingly rely on wireless communication to close the sensing-control loop, a setting that has been extensively studied in the networked control systems literature~\cite{hespanha2007survey,schenato2007foundations}. In precision agriculture, UAV-based platforms are widely adopted for monitoring and actuation; however, their wireless links are inherently bandwidth-limited, intermittent, and energy-constrained~\cite{zeng2016wireless}. Meanwhile, the underlying plant and vehicle dynamics in such applications are often smooth and slowly varying, making periodic state transmission unnecessarily conservative.
 
-Within this framework, we propose an event-triggered communication policy that transmits the system state only when the prediction error exceeds a prescribed threshold. The triggering threshold serves as a single system-level design knob: reducing the threshold improves control performance at the cost of more frequent communication, while increasing it reduces communication usage at the expense of larger transient deviations. We show that this trade-off can be characterized rigorously through stability and ultimate boundedness analysis, without introducing stochastic assumptions or modifying the controller.
+Event-triggered control has therefore emerged as a promising alternative, in which communication decisions are adapted to the system state rather than fixed sampling schedules~\cite{tabuada2007event,heemels2012introduction}. In such architectures, intermittent communication induces a mismatch between the true system state and the controller-side prediction. Importantly, this mismatch is not an exogenous disturbance imposed by the environment, but an endogenous quantity actively regulated through communication events that reset the prediction error when it exceeds a prescribed threshold.
+
+Most existing results on event-triggered control focus on the design of triggering mechanisms and on establishing asymptotic stability, ultimate boundedness, or Zeno-freeness under intermittent communication. While these analyses are powerful, they often obscure the system-level role of communication in shaping closed-loop dynamics. In particular, communication typically appears as a technical condition embedded in Lyapunov arguments, rather than as an explicit component whose effect on system behavior can be directly interpreted and tuned.
+
+Moreover, many mission-oriented unmanned systems, including agricultural UAVs, operate over prescribed finite time horizons dictated by battery limits, coverage requirements, and task scheduling. In such settings, performance guarantees over a finite mission duration are often more relevant than asymptotic behavior as time tends to infinity. This motivates analytical frameworks that explicitly characterize how intermittent communication influences closed-loop performance over finite horizons.
+
+In this paper, we adopt a system-level viewpoint and interpret event-triggered communication as a communication-regulated mechanism acting on the controller-side prediction error. Intermittent transmissions induce a grow-and-reset error process: in the absence of communication, the prediction error evolves according to the plant dynamics, while communication events actively contract the error through estimator updates. From this perspective, communication-induced estimation errors can be treated as an endogenous input acting on an otherwise nominally stable closed-loop system, naturally leading to a finite-time input-to-state stability (FT-ISS) interpretation.
+
+To isolate this performance-communication trade-off in a transparent and analytically tractable manner, we consider a baseline yet practically relevant setting: a discrete-time linear time-invariant system controlled by a fixed linear quadratic regulator (LQR), subject to bounded disturbances. State measurements are delivered to the controller through an error-based event-triggered communication policy parameterized by a single triggering threshold. Rather than designing new triggering mechanisms or controllers, our objective is to characterize how intermittent communication shapes closed-loop behavior and how the triggering threshold serves as a unified SCC design parameter. This perspective aligns with recent efforts on SCC co-design in networked systems~\cite{zhang2019networked}.
 
 The contributions of this paper are summarized as follows:
-
 \begin{itemize}
-\item We show that intermittent communication in closed-loop unmanned systems can be interpreted as a \emph{grow-and-reset mechanism} acting on the controller-side prediction error, yielding a transparent system-level description of communication effects.
-\item Building on this perspective, we propose a simple error-based event-triggered update policy and establish practical stability guarantees, where the ultimate bound scales explicitly with the triggering threshold.
-\item Through simulation studies motivated by precision agriculture scenarios, we demonstrate a clear Pareto-type trade-off between quadratic control performance and communication usage, validating the analytical insights.
+\item We show that intermittent communication can be interpreted as a grow-and-reset mechanism acting on the controller-side prediction error, yielding a transparent system-level description of communication effects on closed-loop dynamics.
+\item We establish a communication-regulated FT-ISS result under bounded disturbances, explicitly revealing how the closed-loop state bound scales with the triggering threshold over a finite mission horizon.
+\item Through simulations motivated by precision agriculture scenarios, we demonstrate clear Pareto-type trade-offs between closed-loop performance and communication usage, as well as robustness under practical communication impairments.
 \end{itemize}
 
+\section{Related Work}
 
-The remainder of the paper is organized as follows. Section~II introduces the system and communication models. Section~III presents the event-triggered communication policy and performance metrics. Section~IV provides stability analysis. Simulation results are reported in Section~V, followed by concluding remarks in Section~VI.
+Event-triggered control and networked control systems have been extensively studied, with a rich body of results on stability analysis, performance guarantees, and communication reduction; see, e.g.,~\cite{tabuada2007event,heemels2012introduction,ge2020dynamic}. Existing works primarily focus on triggering mechanism design and on establishing stability, Zeno-freeness, or robustness under network-induced imperfections such as packet loss and denial-of-service attacks~\cite{dolk2016event,feng2020networked,zhao2020dynamic}.
 
+Beyond model-based designs, data-driven approaches have been proposed to synthesize event-triggered controllers directly from data while preserving stability guarantees~\cite{de2019formulas,de2023event,wang2023data}. Extensions to distributed, stochastic, and large-scale settings have also been explored, where communication constraints interact with uncertainty and scalability.
+
+While these works provide powerful tools for reducing communication and ensuring stability, communication typically appears as an implicit technical condition within Lyapunov-based analyses rather than as an explicit system-level component shaping closed-loop behavior. As a result, it is often difficult to directly interpret how communication decisions regulate estimation accuracy and closed-loop performance.
+
+In contrast, this paper adopts a system-level perspective that models intermittent communication as a grow-and-reset mechanism acting on the controller-side prediction error. By treating communication-induced estimation errors as an endogenous input to an otherwise nominally stable system, we obtain a transparent and analytically tractable characterization of communication effects.
+
+Moreover, most existing results emphasize asymptotic stability, whereas mission-oriented systems often operate over prescribed finite horizons. This motivates finite-horizon stability characterizations that explicitly capture how bounded disturbances and communication-induced errors jointly affect system evolution. Leveraging input-to-state stability (ISS) concepts~\cite{jiang2001input,sontag2015iss} and their finite-time counterparts, we formulate a communication-regulated FT-ISS bound whose dependence on the triggering threshold is explicit.
 
 
 \begin{figure*}[t]
-\centering
-\begin{adjustbox}{max width=\textwidth}
-\begin{tikzpicture}[
-    font=\small,
-    >=Latex,
-    block/.style={draw, rounded corners=2pt, align=center, minimum height=9mm, inner sep=3.5pt},
-    small/.style={draw, rounded corners=2pt, align=center, minimum height=8mm, inner sep=3pt},
-    tiny/.style={draw, rounded corners=2pt, align=center, minimum height=6.5mm, inner sep=2.5pt, font=\footnotesize},
-    line/.style={->, line width=0.6pt},
-    dline/.style={->, dashed, line width=0.6pt},
-    tag/.style={font=\footnotesize, fill=white, inner sep=1pt},
-    grp/.style={draw, rounded corners=2pt, inner sep=6pt}
-]
+    \centering
+    \includegraphics[
+        width=0.95\linewidth,
+        trim= 20 210 20 280,
+        clip,
+    ]{figs/ssc_framework.png}
+    \caption{Ground-station-centric SCC framework with event-triggered communication. State measurements collected by the UAV are transmitted intermittently to a remote ground station according to an error-based triggering rule. Between communication events, the ground station propagates a model-based state prediction, while successful transmissions reset the estimation error through an observer update. This grow-and-reset prediction-error process induces a communication-regulated endogenous input to an otherwise nominally stable closed-loop system. Control actions are generated by a fixed LQR controller, closing the feedback loop over a finite mission horizon.}
 
-% --- Main loop (top row) ---
-\node[block, minimum width=28mm] (plant) {Unmanned\\Platform};
-\node[block, minimum width=28mm, right=10mm of plant] (sense) {Sensing};
-\node[block, minimum width=30mm, right=10mm of sense] (trigger) {Trigger\\Policy};
-\node[block, minimum width=30mm, right=10mm of trigger] (link) {Rural\\Wireless Link};
-\node[block, minimum width=28mm, right=10mm of link] (est) {State\\Estimator};
-\node[block, minimum width=28mm, right=10mm of est] (ctrl) {Feedback\\Controller};
-
-\draw[line] (plant) -- (sense);
-\draw[line] (sense) -- (trigger);
-\draw[line] (trigger) -- (link);
-\draw[line] (link) -- (est);
-\draw[line] (est) -- (ctrl);
-
-% --- Actuation + feedback (bottom right) ---
-\node[block, minimum width=30mm, below=13mm of ctrl] (act) {Actuation};
-\draw[line] (ctrl) -- (act);
-
-\coordinate (fb1) at ($(act.west)+(-74mm,0)$);
-\draw[line] (act.west) -- (fb1) |- (plant.south);
-
-% --- prediction error coupling (center bottom) ---
-\node[small, minimum width=36mm, below=13mm of est] (err) {Estimation\\Error};
-
-\coordinate (linkdown) at ($(link.south)+(0,-5mm)$);
-\draw[dline] (link.south) -- (linkdown);
-\draw[dline] (linkdown) -- (err.north);
-\draw[dline] (err.east) .. controls +(18mm,10mm) and +(-18mm,-12mm) .. (ctrl.south);
-
-% --- Constraints (compact) ---
-\node[small, minimum width=44mm, below=13mm of link] (cons)
-{Constraints\\loss / limited rate / quantization};
-\draw[dline] (link.south) -- (cons.north);
-
-% --- Bursty loss (very compact) ---
-\node[tiny, below=9mm of cons] (ge) {Bursty loss\\(Good $\leftrightarrow$ Bad)};
-\draw[dline] (cons.south) -- (ge.north);
-
-% --- Design knob & objective (compact, no formula) ---
-\node[small, minimum width=34mm, above=7mm of trigger] (knob)
-{Design knob\\trigger threshold};
-\draw[dline] (knob.south) -- (trigger.north);
-
-\node[small, minimum width=60mm, below=13mm of plant, xshift=26mm] (obj)
-{Co-design objective\\Performance $\leftrightarrow$ Communication cost};
-\draw[dline] (obj.north east) .. controls +(22mm,12mm) and +(-18mm,-10mm) .. (trigger.south);
-\draw[dline] (obj.north) .. controls +(0mm,14mm) and +(-30mm,-10mm) .. (ctrl.south west);
-
-% --- Minimal tags (3 only) ---
-\node[tag] at ($(sense.north)+(0,2.1mm)$) {measurement};
-\node[tag] at ($(link.north)+(0,2.1mm)$) {intermittent updates};
-\node[tag] at ($(err.south)+(0,-2.2mm)$) {SCC coupling};
-
-% --- Group boxes in background (avoid covering/rewrite) ---
-\begin{pgfonlayer}{background}
-    \node[grp, fit=(plant)(sense), label={[font=\small]above:Physical \& Sensing}] {};
-    \node[grp, fit=(trigger)(link), label={[font=\small]above:Trigger \& Channel}] {};
-    \node[grp, fit=(est)(ctrl), label={[font=\small]above:Estimation \& Control}] {};
-\end{pgfonlayer}
-
-\end{tikzpicture}
-\end{adjustbox}
-\caption{System-level SCC co-design architecture for agricultural unmanned systems under rural communication constraints.}
-\label{fig:scc_framework}
+    \label{fig:scc_framework}
 \end{figure*}
 
-\section{System Model and Communication Setup}
+\section{System Model and Communication Architecture}
 
-\subsection{Plant Dynamics}
-We consider a discrete-time linear time-invariant (LTI) model for an unmanned platform:
+\subsection{Finite-Horizon Mission Setup}
+
+We consider an unmanned aerial vehicle (UAV) executing a task over a prescribed finite mission horizon
+\[
+k \in \{0,1,\dots,T\}, \quad T < \infty,
+\]
+such as crop monitoring or precision spraying in agricultural environments. The finite horizon reflects practical mission constraints arising from battery limitations, coverage requirements, and task scheduling.
+
+All state estimation, control computation, and communication scheduling are performed at a remote ground station. The UAV acts as a sensing and actuation unit, transmitting measurements to the ground station over a bandwidth-limited wireless uplink and applying control inputs received via a downlink. This architecture is representative of many practical SCC deployments in precision agriculture.
+
+\subsection{Plant Dynamics with Bounded Disturbances}
+
+The UAV dynamics are modeled as a discrete-time linear time-invariant (LTI) system
 \begin{equation}
-x_{k+1} = A x_k + B u_k,
+x_{k+1} = A x_k + B u_k + w_k,
 \label{eq:lti}
 \end{equation}
-where $x_k\in\mathbb{R}^n$ is the state and $u_k\in\mathbb{R}^m$ is the control input.
+where $x_k \in \mathbb{R}^n$ denotes the system state and $u_k \in \mathbb{R}^m$ is the control input. The disturbance term $w_k$ captures unmodeled dynamics, environmental effects such as wind, and discretization errors.
 
-\subsection{Perfect State Measurement and Intermittent Updates}
-To isolate the fundamental performance--communication trade-off, we assume perfect state measurement:
+We assume that the process disturbance is bounded over the mission horizon:
 \begin{equation}
-y_k = x_k.
-\label{eq:perfect_measurement}
+\|w_k\|_2 \le \bar w, \quad \forall k \in \{0,\dots,T\}.
+\label{eq:w_bound}
 \end{equation}
-Communication constraints are captured by \emph{intermittent state updates} delivered from the platform to the controller. Let $\gamma_k\in\{0,1\}$ indicate whether a state update is delivered at time $k$:
-\[
-\gamma_k=1 \;\;\text{(update delivered)},\qquad \gamma_k=0 \;\;\text{(no update)}.
-\]
-The controller maintains a prediction $\hat{x}_k$ of the true state. If an update is delivered, the controller resets its state to the true value; otherwise, it propagates the prediction using the plant model:
+
+State measurements collected onboard the UAV are given by
 \begin{equation}
-\hat{x}_k =
+y_k = C x_k + v_k,
+\label{eq:meas}
+\end{equation}
+where $v_k$ represents measurement noise due to sensor imperfections and quantization. The measurement noise is also assumed to be bounded:
+\begin{equation}
+\|v_k\|_2 \le \bar v, \quad \forall k \in \{0,\dots,T\}.
+\label{eq:v_bound}
+\end{equation}
+
+These bounded disturbance assumptions are standard in networked and event-triggered control and are consistent with the FT-ISS analysis developed later.
+
+\subsection{Remote State Prediction and Event-Triggered Updates}
+
+Due to communication constraints, state measurements are not transmitted at every time step. Instead, the ground station maintains a remote state prediction
+\begin{equation}
+\hat x_k^- = A \hat x_{k-1} + B u_{k-1},
+\label{eq:predict}
+\end{equation}
+which evolves according to the nominal plant dynamics and previously applied control inputs.
+
+Let $\gamma_k \in \{0,1\}$ denote the communication indicator at time $k$, where $\gamma_k = 1$ indicates that a measurement update is successfully received by the ground station. Upon reception, the remote estimate is updated as
+\begin{equation}
+\hat x_k =
 \begin{cases}
-x_k, & \gamma_k=1,\\
-A\hat{x}_{k-1}+B u_{k-1}, & \gamma_k=0.
+\hat x_k^- + L (y_k - C \hat x_k^-), & \gamma_k = 1,\\
+\hat x_k^-, & \gamma_k = 0,
 \end{cases}
 \label{eq:estimator}
 \end{equation}
+where $L$ is a fixed observer gain.
 
-Define the prediction/prediction error
+Define the controller-side prediction error
 \begin{equation}
-\tilde{x}_k \triangleq x_k - \hat{x}_k.
-\label{eq:tilde_def}
+\tilde x_k \triangleq x_k - \hat x_k.
+\label{eq:tilde}
 \end{equation}
-Under \eqref{eq:estimator}, the error obeys a simple \emph{grow-and-reset} dynamic:
+This error captures the mismatch between the true system state and the state information available to the controller and plays a central role in the subsequent analysis.
+
+Combining \eqref{eq:lti}-\eqref{eq:estimator}, the prediction error evolves according to the switched dynamics
 \begin{equation}
-\tilde{x}_k =
+\tilde x_k =
 \begin{cases}
-0, & \gamma_k=1,\\
-A\tilde{x}_{k-1}, & \gamma_k=0.
+(I-LC)\big(A\tilde x_{k-1}+w_{k-1}\big) - L v_k, & \gamma_k = 1,\\
+A\tilde x_{k-1}+w_{k-1}, & \gamma_k = 0,
 \end{cases}
-\label{eq:error_grow_reset}
+\label{eq:error}
 \end{equation}
-Hence, communication affects the closed loop solely through the growth and reset of $\tilde{x}_k$.
+which exhibits a grow-and-contract structure: in the absence of communication, the error propagates according to the open-loop dynamics, while measurement updates actively contract the error through the observer correction.
 
-\subsection{Control Law (Fixed LQR)}
-We use a fixed linear feedback controller designed offline (e.g., LQR):
-\begin{equation}
-u_k = -K \hat{x}_k,
-\label{eq:lqr}
-\end{equation}
-where $K$ stabilizes the nominal system under full state availability.
+\subsection{Event-Triggered Uplink Communication}
 
-Substituting \eqref{eq:lqr} into \eqref{eq:lti} gives the closed-loop dynamics
-\begin{equation}
-x_{k+1} = (A-BK)x_k + BK\tilde{x}_k,
-\label{eq:closed_loop_with_error}
-\end{equation}
-which explicitly separates the nominal contraction $(A-BK)x_k$ from the communication-induced perturbation $BK\tilde{x}_k$.
-
-\section{Event-Triggered Communication and Co-Design Objective}
-
-\subsection{Event-Triggered Update Rule}
-We adopt an error/innovation-based event-triggered state update rule:
+Uplink transmissions are governed by an innovation-based event-triggered communication policy
 \begin{equation}
 \gamma_k =
-\begin{cases}
-1, & \|\tilde{x}_k\|_2 > \delta,\\
-0, & \text{otherwise},
-\end{cases}
-\label{eq:trigger_rule}
+\mathbf{1}\!\left\{
+\|y_k - C\hat x_k^-\|_2 > \delta
+\right\},
+\label{eq:trigger}
 \end{equation}
-where $\delta>0$ is a tunable threshold. Smaller $\delta$ yields more frequent updates and improved control performance; larger $\delta$ reduces communication at the cost of larger transient deviations.
+where $\delta > 0$ is a design threshold regulating the trade-off between communication frequency and estimation accuracy.
 
-\subsection{Performance--Communication Trade-Off}
-Over a finite mission horizon $T$, we quantify control performance by the standard quadratic cost
+This triggering rule transmits measurements only when the innovation exceeds a prescribed tolerance, thereby avoiding unnecessary communication when the controller-side prediction remains sufficiently accurate. The threshold $\delta$ serves as a key design parameter that couples sensing, communication, and control.
+
+\subsection{Uniform Boundedness of the Prediction Error}
+
+\begin{lemma}[Uniform Boundedness of Event-Triggered Prediction Error]
+\label{lem:tilde_bound}
+Suppose that the pair $(A,C)$ is detectable and that the observer gain $L$ is chosen such that $(I-LC)A$ is Schur stable. Under the triggering rule \eqref{eq:trigger} and bounded disturbances
+\eqref{eq:w_bound}-\eqref{eq:v_bound}, there exist constants $\kappa_1>0$ and
+$\kappa_2>0$, depending only on $(A,C,L)$, such that
 \begin{equation}
-J(\delta) \triangleq \sum_{k=0}^{T}\left(x_k^\top Q x_k + u_k^\top R u_k\right),
-\label{eq:perf_cost}
+\|\tilde x_k\|_2 \le \kappa_1 \delta + \kappa_2(\bar w + \bar v),
+\qquad \forall k \in \{0,\dots,T\}.
+\label{eq:tilde_uniform}
 \end{equation}
-and communication usage by the number of delivered updates
-\begin{equation}
-N_{\mathrm{tx}}(\delta)\triangleq \sum_{k=0}^{T}\gamma_k.
-\label{eq:tx_count}
-\end{equation}
-The SCC co-design problem is then to characterize the trade-off curve between $J(\delta)$ and $N_{\mathrm{tx}}(\delta)$ as $\delta$ varies, and to provide stability guarantees for the event-triggered closed loop.
-
-\section{Stability Analysis}
-
-We first establish a stability guarantee that reveals the role of event-triggered updates as an error-reset mechanism.
-
-\begin{theorem}[Practical Stability via Error Reset]
-\label{thm:main}
-Consider the discrete-time closed-loop system
-\begin{equation}
-x_{k+1} = (A - BK)x_k + BK\tilde{x}_k,
-\label{eq:cl}
-\end{equation}
-where $A-BK$ is Schur stable. Let the prediction error $\tilde{x}_k$ evolve according to the grow-and-reset dynamics
-\begin{equation}
-\tilde{x}_k =
-\begin{cases}
-0, & \|\tilde{x}_{k-1}\|_2 > \delta,\\
-A\tilde{x}_{k-1}, & \text{otherwise},
-\end{cases}
-\label{eq:triggered_error}
-\end{equation}
-with triggering threshold $\delta>0$.
-
-Then the closed-loop system \eqref{eq:cl} is practically stable. In particular, there exist constants $c_1>0$, $c_2>0$, and $\rho\in(0,1)$ such that for all $k\ge 0$,
-\begin{equation}
-\|x_k\|_2 \le c_1 \rho^k \|x_0\|_2 + c_2 \delta.
-\label{eq:practical_bound}
-\end{equation}
-Moreover, as $\delta \to 0$, the ultimate bound vanishes and the closed-loop system approaches asymptotic stability. The result explicitly reveals that communication events act as state-dependent error resets, preventing the prediction error from destabilizing the nominal closed loop.
-\end{theorem}
-
+\end{lemma}
 
 \begin{proof}
-Since $A-BK$ is Schur stable, there exists a symmetric positive definite matrix $P \succ 0$ such that the Lyapunov equation
-\begin{equation}
-(A-BK)^\top P (A-BK) - P = -Q
-\label{eq:lyap_eq}
-\end{equation}
-holds for some $Q \succ 0$. Consider the quadratic Lyapunov function $V(x)=x^\top P x$.
 
-Using the closed-loop dynamics \eqref{eq:cl}, we obtain
-\begin{align}
-V(x_{k+1})
-&= x_k^\top (A-BK)^\top P (A-BK) x_k \nonumber\\
-&\quad + 2 x_k^\top (A-BK)^\top P BK \tilde{x}_k
-+ \tilde{x}_k^\top K^\top B^\top P BK \tilde{x}_k.
-\end{align}
-Applying Young's inequality to the cross term yields
-\begin{equation}
-V(x_{k+1}) \le (1-\eta)V(x_k) + c \|\tilde{x}_k\|_2^2,
-\label{eq:lyap_step}
-\end{equation}
-for some $\eta\in(0,1)$ and constant $c>0$ depending on $(A,B,K,P)$.
+When $\gamma_k = 0$, the triggering condition $\|y_k - C\hat{x}_k^{-}\|_2 \le \delta$
+implies that the innovation remains bounded, preventing unbounded growth of the estimation error in the absence of communication. When $\gamma_k = 1$, the observer update induces a contraction through the stable map $(I-LC)A$.
 
-Under the event-triggered rule \eqref{eq:triggered_error}, the prediction error satisfies $\|\tilde{x}_k\|_2 \le \delta$ for all $k$, since it is reset to zero whenever it exceeds the threshold. Substituting this bound into \eqref{eq:lyap_step} gives
-\begin{equation}
-V(x_{k+1}) \le (1-\eta)V(x_k) + c\delta^2.
-\end{equation}
-Standard discrete-time Lyapunov arguments imply that $V(x_k)$ converges to a neighborhood proportional to $\delta^2$, which establishes the bound \eqref{eq:practical_bound}.
+Since $(I-LC)A$ is Schur stable and both process and measurement disturbances are uniformly bounded, the switched error dynamics admit a compact positively invariant set. Standard arguments from event-triggered observer analysis then imply that the size of this invariant set scales linearly with the triggering threshold $\delta$ and the disturbance bounds $\bar w$ and $\bar v$. Consequently, there exist constants $\kappa_1>0$ and $\kappa_2>0$ such that \eqref{10} holds for all $k\in\{0,\ldots,T\}$.
+
 \end{proof}
 
-\begin{remark}
-Theorem~\ref{thm:main} highlights that communication affects the closed-loop system exclusively through the prediction error $\tilde{x}_k$. Event-triggered updates act as an error-reset mechanism that prevents unbounded error growth and preserves the stabilizing effect of the nominal feedback. The triggering threshold $\delta$ therefore serves as a system-level parameter that explicitly governs the trade-off between control performance and communication usage.
+\subsection{Remote Control Law and Communication-Induced Disturbance}
+
+The control input is generated at the ground station using the remote state estimate:
+\begin{equation}
+u_k = -K \hat x_k,
+\label{eq:control}
+\end{equation}
+where the feedback gain $K$ is chosen such that $A - BK$ is Schur stable.
+
+Substituting \eqref{eq:control} into \eqref{eq:lti} yields the closed-loop dynamics
+\begin{equation}
+x_{k+1} = (A - BK)x_k + BK\tilde x_k + w_k,
+\label{eq:cl}
+\end{equation}
+where the prediction error $\tilde x_k$ appears as a communication-induced endogenous disturbance acting on an otherwise nominally stable system. This representation forms the basis for the communication-regulated FT-ISS analysis in the next section.
+
+\section{Communication-Regulated Finite-Time ISS}
+
+This section formalizes the system-level interpretation introduced earlier by establishing a FT-ISS characterization of the closed-loop dynamics under event-triggered communication. The analysis explicitly reveals how communication-induced estimation errors enter the system as an endogenous disturbance whose magnitude is regulated by the triggering threshold.
+
+\begin{theorem}[Communication-Regulated Finite-Time ISS]
+\label{thm:ftiss}
+Consider the closed-loop system
+\begin{equation}
+x_{k+1} = (A-BK)x_k + d_k,
+\qquad
+d_k \triangleq BK\tilde x_k + w_k,
+\label{eq:cl_ftiss}
+\end{equation}
+evolving over the finite horizon $k \in \{0,\dots,T\}$.
+Suppose that the feedback gain $K$ is chosen such that $A-BK$ is Schur stable and that the disturbances satisfy
+\eqref{eq:w_bound}-\eqref{eq:v_bound}.
+Then the system \eqref{eq:cl_ftiss} is finite-time input-to-state stable (FT-ISS). In particular, there exist constants $c_x>0$, $c_d>0$, and $\rho \in (0,1)$ such that
+\begin{equation}
+\|x_k\|_2
+\le
+c_x \rho^k \|x_0\|_2
++
+c_d \max_{0\le i \le k-1}\|d_i\|_2,
+\qquad \forall k \in \{0,\dots,T\}.
+\label{eq:ftiss_std}
+\end{equation}
+
+Moreover, under the event-triggered estimation mechanism described in Section~IV,
+\begin{equation}
+\max_{0\le i \le k-1}\|d_i\|_2
+\le
+\|BK\|\big(\kappa_1\delta + \kappa_2(\bar w+\bar v)\big) + \bar w,
+\label{eq:d_uniform}
+\end{equation}
+where $\kappa_1$ and $\kappa_2$ are the constants defined in Lemma~\ref{lem:tilde_bound}.
+Consequently, the state trajectory satisfies the bound
+\begin{equation}
+\|x_k\|_2
+\le
+c_x \rho^k \|x_0\|_2
++
+c_d\Big(
+\|BK\|\big(\kappa_1\delta + \kappa_2(\bar w+\bar v)\big) + \bar w
+\Big),
+\qquad \forall k \in \{0,\dots,T\}.
+\label{eq:ftiss_comm}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Since $A-BK$ is Schur stable, there exists a positive definite matrix $P \succ 0$ such that
+\[
+(A-BK)^\top P (A-BK) - P = -Q
+\]
+for some $Q \succ 0$.
+Consider the quadratic Lyapunov function $V(x) = x^\top P x$.
+Standard Lyapunov arguments for discrete-time systems imply that
+\eqref{eq:ftiss_std} holds for the system \eqref{eq:cl_ftiss} with input $d_k$ over the finite horizon.
+
+The bound on $d_k$ follows directly from Lemma~\ref{lem:tilde_bound} and the disturbance assumptions
+\eqref{eq:w_bound}-\eqref{eq:v_bound}. Substituting this bound into \eqref{eq:ftiss_std} yields
+\eqref{eq:ftiss_comm}, completing the proof.
+\end{proof}
+
+\begin{remark}[Communication-Regulated Practical Stability]
+The FT-ISS estimate \eqref{eq:ftiss_comm} implies finite-time practical stability of the closed-loop system over the mission horizon. In particular, the triggering threshold $\delta$ explicitly regulates the magnitude of the communication-induced disturbance and thus serves as a unified SCC design parameter. Increasing $\delta$ reduces uplink communication at the expense of a larger state bound, while decreasing $\delta$ improves closed-loop performance at the cost of more frequent transmissions.
 \end{remark}
-
-\section{Communication-Aware Sensing--Communication--Control Co-Design}
-
-This section presents the proposed SCC co-design framework, which explicitly balances control performance and communication usage through event-triggered sensing.
-
-\subsection{Problem Formulation}
-
-Precision agriculture missions typically operate over a finite duration with strict communication and energy budgets. Accordingly, we formulate the SCC co-design objective over a finite horizon $T$ as
-
-\begin{equation}
-\min_{\delta} \;
-\mathbb{E}\!\left[\sum_{k=0}^{T}
-\left( x_k^\top Q x_k + u_k^\top R u_k \right)\right],
-\end{equation}
-subject to a communication budget constraint
-\begin{equation}
-\mathbb{E}[B(0{:}T)] \le B_{\max},
-\end{equation}
-
-where $B(0{:}T)$ denotes the total number of transmitted bits over the mission duration and $B_{\max}$ is the available bit budget.
-
-This formulation explicitly captures the trade-off between tracking performance and communication usage under realistic agricultural deployment constraints. The triggering threshold $\delta$ serves as a system-level design parameter that
-mediates this trade-off by regulating sensing updates, estimation accuracy, and closed-loop control performance.
-
-\subsection{Event-Triggered Sensing and Communication}
-
-Instead of periodic transmission, we adopt an event-triggered sensing mechanism based on the innovation between the current measurement and the predicted state:
-
-\begin{equation}
-\| y_k - \hat{x}_{k|k-1} \|_2 > \delta,
-\end{equation}
-
-where $\hat{x}_{k|k-1} = A \hat{x}_{k-1} + B u_{k-1}$ and $\delta>0$ is a triggering threshold.
-
-This innovation-based triggering condition explicitly couples sensing, communication, and control. The predicted state depends on past control inputs, while the triggering decision determines whether fresh sensing information is transmitted. As a result, control actions influence future communication patterns, and communication constraints affect estimation accuracy and
-closed-loop performance.
-
-Such coupling is particularly relevant in agricultural missions involving smooth trajectories and long-duration operation, where aggressive periodic communication is unnecessary and often infeasible.
-
-\subsection{Control Design}
-
-We employ a linear quadratic regulator (LQR) based on the available estimate $\hat{x}_k$:
-
-\begin{equation}
-u_k = -K \hat{x}_k,
-\end{equation}
-
-where the feedback gain $K$ is designed offline to stabilize the nominal system under full-state availability.
-
-The controller itself is not communication-aware. Instead, communication constraints influence closed-loop behavior indirectly through prediction error dynamics induced by event-triggered sensing and packet loss. This separation allows us to isolate and analyze the fundamental impact of sensing and communication policies on control performance without redesigning the feedback
-controller.
-
-\subsection{Design Trade-Off and Parameter Interpretation}
-The triggering threshold $\delta$ serves as a key system-level design parameter. Smaller values of $\delta$ result in more frequent sensing updates, which typically improve tracking accuracy and robustness at the cost of higher communication usage. Conversely, larger values of $\delta$ reduce communication usage but may increase prediction error and degrade control performance.
-
-This trade-off underscores the necessity of SCC co-design: communication parameters cannot be selected independently of control objectives in bandwidth-limited agricultural environments. Rather than fixing sensing or communication parameters a priori, the proposed framework enables systematic tuning of $\delta$ to adapt system operation to varying communication conditions and mission requirements.
 
 \section{Simulation Results}
 
-This section evaluates the proposed event-triggered sensing--communication--control (SCC) framework in a precision-agriculture-inspired unmanned aerial vehicle (UAV) scenario.
-The simulations are designed to serve three complementary purposes.
-First, we characterize the fundamental performance--communication trade-off induced by the triggering threshold.
-Second, we visualize the grow-and-reset mechanism underlying the stability analysis in Section~IV.
-Third, we assess robustness under practical communication impairments and benchmark the proposed strategy against periodic and random transmission under matched communication usage.
+This section presents numerical simulations that illustrate and validate the proposed communication-regulated SCC framework.
+All results are obtained over a finite mission horizon using a fixed stabilizing controller, in direct correspondence with the theoretical setting
+developed in the preceding sections.
 
-\subsection{Common Simulation Setup}
+\subsection{Simulation Setup}
 
-We consider a planar UAV modeled as a discrete-time double-integrator system with sampling period $T_s=0.1$~s.
-The system state is $x_k=[p_x,v_x,p_y,v_y]^\top$ and the control input is $u_k=[a_x,a_y]^\top$.
-A fixed linear quadratic regulator (LQR) is designed offline under full-state availability with weighting matrices
-$Q=\mathrm{diag}(10,1,10,1)$ and $R=0.1I$.
+We consider a planar UAV modeled as a discrete-time double integrator with sampling period $T_s = 0.1$~s. The state is
+$x_k = [p_x, v_x, p_y, v_y]^\top$, where $(p_x,p_y)$ and $(v_x,v_y)$ denote position and velocity, respectively, and the control input is
+$u_k = [a_x, a_y]^\top$. A LQR is designed offline under full-state availability, with weighting matrices
+$Q = \mathrm{diag}(10, 1, 10, 1)$ and $R = 0.1 I$.
+The resulting feedback gain $K$ renders $A-BK$ Schur stable and is kept fixed throughout all simulations.
 
-The UAV executes a lawnmower-style coverage trajectory over a rectangular field of size $200\times100$~m, which is representative of crop-scouting missions in precision agriculture.
-Unless otherwise stated, simulations are conducted over a finite horizon $T$, and results are averaged over 30 Monte Carlo runs with different random seeds.
+The UAV executes a lawnmower-style coverage task over a $200 \times 100$~m field, representative of precision agriculture missions.
+Simulations are conducted over a finite horizon $T$ and averaged over 30 Monte Carlo runs with randomized initial conditions.
+Unless otherwise specified, bounded process disturbances are included to induce nontrivial prediction-error growth.
+State estimation and communication scheduling are performed at a remote ground station using the event-triggered mechanism described in Section~IV.
 
-While the theoretical analysis in Sections~II--IV assumes perfect state measurement and noiseless communication to isolate the effects of intermittent updates, the simulations additionally incorporate measurement noise, finite-bit quantization, and bursty packet loss to evaluate practical robustness.
-
-
-\subsection{Experiment 1: Performance--Communication Pareto Trade-Off}
-
-\textbf{Objective.}
-This experiment quantifies the fundamental trade-off between quadratic control performance and communication usage induced by the triggering threshold $\delta$.
-
-\textbf{Protocol.}
-We sweep the triggering threshold $\delta$ over a logarithmically spaced grid and, for each value, simulate the closed-loop system using the event-triggered update rule in~\eqref{eq:trigger_rule}.
-For each run, we compute the quadratic performance cost
-\begin{equation}
-J(\delta)=\sum_{k=0}^{T}\big(x_k^\top Q x_k + u_k^\top R u_k\big),
-\end{equation}
-and the total number of transmitted state updates
-\begin{equation}
-N_{\mathrm{tx}}(\delta)=\sum_{k=0}^{T}\gamma_k.
-\end{equation}
-All results are averaged over multiple initial conditions.
-
-\textbf{Results.}
-Fig.~\ref{fig:pareto} plots $J(\delta)$ versus $N_{\mathrm{tx}}(\delta)$, revealing a clear Pareto-type trade-off.
-As the triggering threshold decreases, communication becomes more frequent and the performance approaches that of near-periodic updates.
-Conversely, increasing $\delta$ substantially reduces communication usage at the cost of a gradual increase in control effort and state deviation.
-
-Notably, large reductions in communication can be achieved with only moderate performance degradation, confirming that the triggering threshold $\delta$ serves as an effective system-level design knob for balancing control performance and communication usage.
-Fig.~\ref{fig:quantile_band} further shows the interquartile range across Monte Carlo runs, indicating that the observed trade-off is robust and not driven by outliers.
+\subsection{Prediction-Error Dynamics under Event-Triggered Communication}
 
 \begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_pareto_tradeoff.png}
-\caption{Performance--communication Pareto frontier induced by the event-triggered threshold $\delta$.
-Each point corresponds to a different $\delta$, illustrating a clear trade-off between quadratic control cost and communication usage.}
-\label{fig:pareto}
+    \centering
+    \includegraphics[width=0.95\linewidth]{figs/fig_B_time_response.pdf}
+    \caption{Time-domain visualization of the grow-and-reset prediction-error mechanism induced by event-triggered communication.
+    The top panel shows the evolution of the prediction error norm $\|\tilde x_k\|_2$ together with the triggering threshold $\delta$.
+    Between communication events, the error grows according to the open-loop prediction dynamics; when the innovation exceeds $\delta$,
+    a transmission is triggered and the observer update contracts the error.
+    The bottom panel reports the cumulative number of successfully delivered uplink packets, exhibiting a staircase structure aligned with the error resets.}
+    \label{fig:time_response}
 \end{figure}
+
+Figure~\ref{fig:time_response} illustrates the evolution of the controller-side prediction error under event-triggered communication for a representative triggering threshold $\delta$.
+Between communication events, the controller relies on model-based prediction, and the error evolves according to the open-loop estimation dynamics.
+When the prediction error exceeds the threshold, a communication event is triggered, resulting in an observer update that contracts the error.
+
+Also shown is the cumulative number of transmitted uplink packets, which exhibits a staircase structure aligned with the error resets.
+The prediction error remains confined within a threshold-dependent envelope and does not grow unbounded despite intermittent communication.
+This grow-and-reset behavior provides a direct time-domain illustration of the boundedness result in Lemma~\ref{lem:tilde_bound}
+and highlights the role of communication in actively regulating estimation accuracy.
+
+\subsection{Performance-Communication Trade-Off}
 
 \begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_quantile_band.png}
-\caption{Interquartile (25--75\%) bands of $J$ and total bits versus $\delta$, showing variability across runs.}
-\label{fig:quantile_band}
+    \centering
+    \includegraphics[width=0.95\linewidth]{figs/fig_A_pareto_tradeoff.pdf}
+    \caption{Performance-communication trade-off induced by the triggering threshold $\delta$.
+    The figure reports the quadratic control cost versus the total number of delivered uplink packets over the finite mission horizon.
+    Event-triggered communication (ET) achieves a smooth Pareto-type frontier and consistently outperforms periodic (PER) and random (RAND)
+    transmission under identical communication budgets.
+    A distinct knee region highlights an operating point where substantial communication savings are achieved with only moderate performance degradation.}
+    \label{fig:pareto}
 \end{figure}
 
+We next examine how the triggering threshold $\delta$ regulates the trade-off between closed-loop performance and communication usage.
+Figure~\ref{fig:pareto} reports the quadratic control cost as a function of the total number of delivered uplink packets over the mission horizon.
 
-\subsection{Experiment 2: Time-Domain Validation of the Grow-and-Reset Mechanism}
+Event-triggered communication achieves a smooth Pareto-type frontier and consistently outperforms periodic and random transmission strategies under identical communication budgets.
+A distinct knee region is observed, indicating an operating regime in which substantial communication savings are achieved with only moderate performance degradation.
+This behavior is consistent with the communication-regulated FT-ISS bound in Theorem~\ref{thm:ftiss}, which predicts that increasing $\delta$ enlarges the effective disturbance induced by intermittent communication while reducing communication usage.
 
-\textbf{Objective.}
-This experiment visualizes the time-domain behavior of the prediction error and the closed-loop state, providing insight into the grow-and-reset mechanism underlying the stability result in Theorem~\ref{thm:main}.
-
-\textbf{Protocol.}
-We select a representative mid-range triggering threshold from Experiment~1.
-For this case, we record the prediction error norm $\|\tilde{x}_k\|_2$, the system state norm $\|x_k\|_2$, and the triggering instants $\{k:\gamma_k=1\}$ during a single mission rollout.
-
-\textbf{Results.}
-Fig.~\ref{fig:time_response} visualizes the grow-and-reset mechanism.
-When no update is delivered, the controller operates on model-based prediction and the prediction error grows.
-Once $\|\tilde{x}_k\|_2$ exceeds $\delta$, a state update is triggered, resetting the error.
-This behavior prevents unbounded error accumulation and keeps the closed-loop state bounded, in line with Theorem~\ref{thm:main}.
+\subsection{Comparison under Matched Communication Budgets}
 
 \begin{figure}[t]
-\centering
-\includegraphics[width=0.9\linewidth]{result/fig_time_response.pdf}
-\caption{Grow-and-reset mechanism in a single rollout with a representative $\delta$.
-(a) The prediction error $\|\tilde{x}_k\|_2$ grows between updates and is reset when communication is triggered.
-(b) The closed-loop state norm $\|x_k\|_2$ remains bounded under intermittent updates.}
-\label{fig:time_response}
+    \centering
+    \includegraphics[width=0.95\linewidth]{figs/fig_C_budget_curves.pdf}
+    \caption{Time-domain comparison between event-triggered (ET) and periodic (PER) communication under matched communication budgets.
+    Both strategies deliver approximately the same number of uplink packets over the mission horizon.
+    Despite identical communication usage, event-triggered communication yields smaller state deviations and improved transient performance
+    by allocating communication resources in a state-dependent manner.}
+    \label{fig:budget_comparison}
 \end{figure}
 
-\subsection{Experiment 3: Practical Impairments and Benchmarking under Matched Communication}
+While the Pareto frontier provides a global characterization of the performance-communication trade-off, a direct time-domain comparison further clarifies the structural advantage of state-dependent communication.
+Figure~\ref{fig:budget_comparison} compares event-triggered and periodic communication strategies selected to deliver approximately the same number of uplink packets over the mission horizon.
 
-\textbf{Objective.}
-This experiment evaluates the robustness of the proposed framework under realistic rural communication constraints and compares event-triggered communication with periodic and random transmission under matched communication usage.
+Despite identical communication budgets, event-triggered communication yields smaller state deviations and improved transient performance.
+This improvement arises from the state-dependent allocation of communication resources rather than from increased transmission frequency.
+By prioritizing updates when the prediction error is large, event-triggered communication makes more effective use of limited uplink capacity.
 
-\textbf{Practical impairments.}
-We enable measurement noise according to $y_k=x_k+v_k$, where $v_k$ is zero-mean Gaussian noise with standard deviation $\sigma_v=0.2$.
-Finite-bit communication is modeled using uniform quantization with resolution $b\in\{4,6,8,10,12\}$ bits per state component.
-Packet loss follows a Gilbert--Elliott channel with loss probabilities $(p_{\mathrm{loss}}^{G},p_{\mathrm{loss}}^{B})=(0.05,0.5)$ in the Good and Bad states, respectively.
-A mission-level bit budget $B_{\max}$ is enforced; transmissions are suppressed once the remaining budget is insufficient.
-
-\subsubsection{Robustness to Quantization, Packet Loss, and Bit Budgets}
-
-We evaluate performance under varying quantization resolutions and communication budgets.
-For each setting, we report the quadratic cost $J$, the total number of transmitted bits $B(0{:}T)$, and the tracking root-mean-square error (RMSE).
-
-To make the results easier to scan, the four sub-experiments and their figures are listed explicitly:
-\begin{itemize}
-    \item Quantization resolution sweep $\rightarrow$ Fig.~\ref{fig:quant_tradeoff}.
-    \item Bit-budget sweep $\rightarrow$ Fig.~\ref{fig:budget_tradeoff}.
-    \item Bursty Markov packet loss sweep $\rightarrow$ Fig.~\ref{fig:markov_robustness}.
-    \item Sensitivity heatmap over $(\delta, p_{\mathrm{loss}}^{B})$ $\rightarrow$ Fig.~\ref{fig:sensitivity_heatmap}.
-\end{itemize}
-
-The results show that coarser quantization and tighter bit budgets gradually degrade performance, but the closed-loop system remains practically stable across all tested conditions (Fig.~\ref{fig:quant_tradeoff} and Fig.~\ref{fig:budget_tradeoff}).
-Bursty packet losses primarily increase the inter-update intervals, yet the event-triggered mechanism adapts by allocating communication resources when the prediction error becomes significant (Fig.~\ref{fig:markov_robustness}).
-To highlight sensitivity across operating points, Fig.~\ref{fig:sensitivity_heatmap} visualizes the RMS error over a grid of $\delta$ and bursty-loss severity, indicating smooth degradation rather than abrupt failure.
-Fig.~\ref{fig:robustness_summary} summarizes the resulting budget--performance trade-off under a fixed realistic impairment setting.
+\subsection{Robustness under Communication Imperfections}
 
 \begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_robustness_summary.pdf}
-\caption{Robustness under practical communication impairments.
-Event-triggered (ET) and periodic (PER) transmission are compared in the presence of measurement noise, finite-bit quantization, and bursty Gilbert--Elliott packet loss.
-ET maintains lower cost than PER across communication budgets, indicating that the advantage of state-dependent communication persists under realistic conditions.}
-\label{fig:robustness_summary}
+    \centering
+    \includegraphics[width=0.95\linewidth]{figs/fig_D_robustness_panel.pdf}
+    \caption{Robustness of event-triggered communication under practical communication impairments.
+    The figure compares the normalized quadratic cost of event-triggered and periodic communication under measurement noise,
+    finite-bit quantization, packet loss, and moderate model mismatch.
+    All results are reported under matched communication budgets and normalized by a high-communication periodic baseline.
+    Event-triggered communication consistently outperforms periodic transmission, while preserving the qualitative structure
+    of the performance-communication trade-off.}
+    \label{fig:robustness}
 \end{figure}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_quant_tradeoff.png}
-\caption{Quantization rate--distortion--control trade-off.}
-\label{fig:quant_tradeoff}
-\end{figure}
+Finally, the robustness of the proposed framework is assessed under practical communication impairments commonly encountered in agricultural deployments.
+The simulations incorporate measurement noise, finite-bit quantization, bursty packet loss modeled by a Gilbert-Elliott channel, and moderate model mismatch.
+These effects enter the closed-loop dynamics as bounded disturbances, consistent with the FT-ISS formulation.
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_budget_tradeoff.png}
-\caption{Budget robustness under event-triggered communication.}
-\label{fig:budget_tradeoff}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_markov_robustness.png}
-\caption{Robustness under bursty Gilbert--Elliott losses.}
-\label{fig:markov_robustness}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.9\linewidth]{result/fig_sensitivity_heatmap.png}
-\caption{Sensitivity of RMS error to $\delta$ and bursty-loss severity.}
-\label{fig:sensitivity_heatmap}
-\end{figure}
-
-\subsubsection{Comparison with Periodic and Random Transmission}
-
-To ensure a fair comparison, we tune the period $M$ of the periodic transmission scheme and the Bernoulli probability $q$ of random transmission such that they match the event-triggered strategy in terms of delivered update rate.
-We then compare the resulting control performance and communication usage.
-
-Across all tested scenarios, event-triggered communication achieves comparable or lower quadratic cost than both periodic and random transmission under the same communication budget.
-This demonstrates that allocating communication based on system state, rather than time alone, leads to more efficient closed-loop operation in communication-constrained environments.
-
-Fig.~\ref{fig:periodic_comparison} compares event-triggered and periodic baselines over multiple $\delta$ values under matched communication budgets (bits).
-Fig.~\ref{fig:baseline_boxplot} and Fig.~\ref{fig:baseline_cdf} summarize the distributional advantage of event-triggered updates over periodic and random baselines.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.85\linewidth]{result/fig_periodic_comparison.pdf}
-\caption{Event-triggered (ET) versus periodic (PER) transmission under matched communication usage.
-For each triggering threshold $\delta$, the periodic period $M$ is chosen to match the average communication budget (total bits) of ET.
-ET achieves lower quadratic cost than periodic transmission for the same communication budget.}
-\label{fig:periodic_comparison}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.9\linewidth]{result/fig_single_uav_boxplot.png}
-\caption{Distributional comparison of $J$, RMS, and bits across strategies.}
-\label{fig:baseline_boxplot}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.9\linewidth]{result/fig_single_uav_cdf.png}
-\caption{CDF comparison for $J$ and RMS across strategies.}
-\label{fig:baseline_cdf}
-\end{figure}
-
-\subsection{Summary}
-
-The three experiments collectively validate the proposed SCC framework.
-Experiment~1 establishes a clear and tunable performance--communication Pareto trade-off.
-Experiment~2 confirms the grow-and-reset mechanism predicted by the stability analysis.
-Experiment~3 demonstrates robustness under realistic communication impairments and highlights the advantage of event-triggered updates over periodic and random baselines under matched communication usage.
-
-\subsection{Discussion}
-The simulation results validate the central claim of this paper: event-triggered communication provides an effective and intuitive mechanism to trade control performance for communication cost. The observed Pareto curves closely align with the analytical insights in Section~IV, and the time-domain responses confirm the role of error reset in preserving closed-loop stability.
-
-These results suggest that substantial communication savings can be achieved without redesigning the controller, by introducing a lightweight triggering mechanism at the system level.
+Figure~\ref{fig:robustness} summarizes the resulting performance under these impairments by comparing event-triggered and periodic communication at matched communication budgets.
+Across all scenarios, event-triggered communication consistently outperforms periodic transmission, and the qualitative structure of the performance-communication trade-off is preserved.
+These results indicate that the benefits of event-triggered communication arise from its intrinsic state-dependent regulation of estimation error rather than from idealized communication assumptions.
 
 \section{Conclusion}
 
-This paper investigated a fundamental performance--communication trade-off in closed-loop unmanned systems operating under communication constraints. Focusing on a baseline yet practically relevant setting with perfect state measurement and a fixed LQR controller, we showed how intermittent state updates alone can significantly shape closed-loop behavior. By modeling communication as an event-triggered reset mechanism on the controller-side prediction error, we obtained a transparent system-level description of how communication decisions influence control performance.
+This paper provided a system-level reinterpretation of event-triggered SCC architectures, in which intermittent communication is explicitly modeled as a communication-regulated
+endogenous input acting on the closed-loop system over a finite mission horizon. Focusing on a linear system controlled by a fixed LQR, we interpreted event-triggered communication as a grow-and-reset mechanism acting on the controller-side prediction error, enabling a transparent characterization of how communication decisions shape closed-loop dynamics. An error-based event-triggered communication policy was analyzed, with the triggering threshold serving as an explicit SCC design parameter. A communication-regulated FT-ISS characterization was established under bounded disturbances, revealing explicit scaling of the closed-loop state bound with the triggering threshold. Simulations motivated by precision agriculture scenarios illustrated clear Pareto-type trade-offs between control performance and communication usage, confirming that substantial communication reductions can be achieved with only moderate performance degradation.
 
-An error-based event-triggered communication policy was proposed, with a single threshold parameter serving as an explicit design knob. We established stability guarantees showing that the closed-loop system remains ultimately bounded, with the bound scaling directly with the triggering threshold. Simulation results further revealed clear Pareto-type trade-offs between quadratic control performance and communication usage, demonstrating that substantial reductions in transmission frequency can be achieved with only moderate performance degradation.
-
-The results highlight that communication-aware control does not necessarily require controller redesign or complex scheduling mechanisms. Instead, lightweight event-triggered updates can already yield significant efficiency gains by allocating communication resources only when they are most beneficial for feedback. These insights are particularly relevant for long-duration unmanned and cyber--physical system deployments, such as precision agriculture, where communication resources are scarce and sustained operation is required.
