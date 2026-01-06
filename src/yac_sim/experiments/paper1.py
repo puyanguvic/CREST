@@ -261,12 +261,12 @@ def _scalar_rollout(cfg: SimConfig, policy: str, param: float | int, lamb: float
             do_tx = (k % max(int(param), 1) == 0)
         else:
             raise ValueError(policy)
+        Jp += s + lamb * float(do_tx)
         if do_tx:
             s = s_upd
             N_tx += 1
         else:
             s = s_pred
-        Jp += s + lamb * float(do_tx)
     return Jp, N_tx
 
 
@@ -306,12 +306,12 @@ def _dp_oracle(cfg: SimConfig, lamb: float, grid_size: int = 160) -> tuple[float
         v0 = s + np.interp(s_pred, s_grid, V_next)
         v1 = s + lamb + np.interp(s_upd, s_grid, V_next)
         if v1 < v0:
+            Jp += s + lamb
             s = s_upd
             N_tx += 1
-            Jp += s + lamb
         else:
-            s = s_pred
             Jp += s
+            s = s_pred
     return Jp, N_tx
 
 
