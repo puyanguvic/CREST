@@ -136,7 +136,8 @@ def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None
             x_hat = x_hat_pred
             P = P_pred
 
-        P_trace[k] = float(np.trace(P))
+        # Log prediction covariance trace used by the trigger.
+        P_trace[k] = trace_pred
 
         # control uses remote estimate only (paper eq. (control))
         u = -(K @ x_hat).reshape(-1)

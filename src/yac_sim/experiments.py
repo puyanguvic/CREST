@@ -122,12 +122,14 @@ def figure_A_pareto(cfg: SimConfig, outdir: Path) -> float:
     ax1.set_xlabel("Delivered updates")
     ax1.set_ylabel(r"$J_x$")
     ax1.grid(True, alpha=0.3)
+    ax1.set_xlim(0, 250)
     ax1.xaxis.set_major_locator(MaxNLocator(nbins=5))
     ax1.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
     ax2.set_xlabel("Delivered updates")
     ax2.set_ylabel(r"$E_u$")
     ax2.grid(True, alpha=0.3)
+    ax2.set_xlim(0, 250)
     ax2.xaxis.set_major_locator(MaxNLocator(nbins=5))
     ax2.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
@@ -166,7 +168,7 @@ def figure_B_time_response(cfg: SimConfig, outdir: Path, delta_knee: float) -> N
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(3.5, 2.6), sharex=True)
 
-    ax1.plot(t, P_trace, label=r"$\mathrm{tr}(P_k)$")
+    ax1.plot(t, P_trace, label=r"$\mathrm{tr}(P_k^-)$")
     ax1.axhline(cfg1.delta, linestyle="--", linewidth=0.8, label=r"threshold $\delta$")
     idx = np.where(tx > 0)[0]
     if idx.size > 0:
