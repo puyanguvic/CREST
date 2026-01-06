@@ -18,19 +18,16 @@ class SimConfig:
     period_M: int = 10
     random_p: float = 0.1  # for random baseline
 
-    # disturbances / noise (paper: bounded)
-    w_bar: float = 0.06   # ||w_k||_inf bound used for sampling; paper assumes ||w_k||_2 <= w_bar (see sim_single)
-    v_bar: float = 0.00   # ||v_k||_inf bound
-    # legacy Gaussian stds (kept for backwards compatibility; ignored when mode='theory' and bounds are used)
+    # disturbances / noise (paper: Gaussian with covariance)
+    w_bar: float = 0.06   # legacy: L_infty bound (kept for compatibility; not used in new experiments)
+    v_bar: float = 0.00   # legacy: L_infty bound (kept for compatibility; not used in new experiments)
+    # Gaussian noise stds for process and measurement (used in Kalman covariance updates)
     sigma_w: float = 0.03
-    sigma_v: float = 0.00
+    sigma_v: float = 0.02
     bits_per_value: int = 32
 
     # measurement model (paper uses y = Cx + v; default is full-state)
     C_full_state: bool = True
-
-    # observer gain (paper uses fixed L; default L = I for full-state)
-    L_gain: float = 1.0
 
     # channel (Gilbert–Elliott)
     p_good_to_bad: float =  0.03
@@ -51,6 +48,8 @@ class SimConfig:
     Q_py: float = 10.0
     Q_vy: float = 1.0
     R_u: float = 0.1
+    # initial estimation covariance scale (P0 = P0_scale * I)
+    P0_scale: float = 1.0
 
     def force_theory(self) -> None:
         """Configure idealized 'theory' mode consistent with the paper assumptions."""
@@ -60,4 +59,3 @@ class SimConfig:
         self.loss_good = 0.0
         self.loss_bad = 0.0
         self.mismatch_eps = 0.0
-

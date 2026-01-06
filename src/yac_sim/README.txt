@@ -1,10 +1,10 @@
 YAC / SCC simulation code (paper-aligned)
 
 Run:
-  python -m yac_scc --outdir result
+  python -m yac_sim --outdir result
 
-Key updates vs previous:
-- Bounded disturbances/noise (w_bar, v_bar) consistent with the paper assumptions.
-- Observer update in paper form: xhat = xhat^- + L (y - C xhat^-), with configurable L_gain and C (full-state by default).
-- Outputs include prediction error norm ||tilde x|| and innovation norm.
+Key notes:
+- Process/measurement noise modeled as Gaussian with stds (sigma_w, sigma_v).
+- Intermittent Kalman filter drives the estimation covariance; triggering uses tr(P_k) > delta.
+- Outputs include prediction error norm ||tilde x||, innovation norm, and trace(P_k).
 - Trade-off curves use delivered packets as the primary communication budget metric.

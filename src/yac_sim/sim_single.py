@@ -15,17 +15,12 @@ def _cost_matrices(cfg: SimConfig) -> tuple[np.ndarray, np.ndarray]:
     return Q, R
 
 
-def _bounded_vec(rng: np.random.Generator, bound: float, size: int) -> np.ndarray:
-    """Sample a vector with component-wise bound in [-bound, bound].
-
-    Paper assumption is ||w_k||_2 <= \bar w and ||v_k||_2 <= \bar v.
-    We sample uniformly in an L_infty box; this implies an L2 bound:
-      ||z||_2 <= sqrt(size) * bound.
-    """
-    b = float(bound)
-    if b <= 0.0:
+def _gaussian_noise(rng: np.random.Generator, sigma: float, size: int) -> np.ndarray:
+    """Zero-mean Gaussian noise with isotropic standard deviation."""
+    s = float(sigma)
+    if s <= 0.0:
         return np.zeros((size,), dtype=float)
-    return rng.uniform(-b, b, size=(size,)).astype(float)
+    return rng.normal(0.0, s, size=(size,)).astype(float)
 
 
 def _measurement_matrices(cfg: SimConfig, n: int) -> tuple[np.ndarray, int]:
@@ -44,26 +39,6 @@ def _measurement_matrices(cfg: SimConfig, n: int) -> tuple[np.ndarray, int]:
     return C, p
 
 
-def _observer_gain(cfg: SimConfig, n: int, p: int) -> np.ndarray:
-    """Fixed observer gain L used in the paper update: xhat = xhat^- + L(y - C xhat^-)."""
-    # Default: full-state, L = I (equivalent to reset-to-measurement, but written in the paper's form)
-    gain = float(getattr(cfg, "L_gain", 1.0))
-    if getattr(cfg, "C_full_state", True) and p == n:
-        return gain * np.eye(n, dtype=float)
-
-    # For partial measurement, use a simple gain mapping innovation (p) into state (n)
-    # Here we inject the position innovations into the corresponding state components.
-    L = np.zeros((n, p), dtype=float)
-    if n == 4 and p == 2:
-        L[0, 0] = gain
-        L[2, 1] = gain
-    else:
-        # Fallback: scaled identity on min(n, p)
-        for i in range(min(n, p)):
-            L[i, i] = gain
-    return L
-
-
 def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None = None) -> dict:
     """Simulate one rollout over a finite horizon.
 
@@ -78,7 +53,6 @@ def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None
     A, B = double_integrator_2d(cfg.Ts)
     n = A.shape[0]
     C, p = _measurement_matrices(cfg, n)
-    L = _observer_gain(cfg, n, p)
 
     Q, R = _cost_matrices(cfg)
     K = dlqr(A, B, Q, R)  # control law uses estimate: u = -K x_hat
@@ -93,6 +67,10 @@ def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None
     x = np.array([rng.normal(0, 5.0), rng.normal(0, 1.0), rng.normal(0, 5.0), rng.normal(0, 1.0)], dtype=float)
     x_hat = x.copy()
     u_prev = np.zeros((2,), dtype=float)
+    P = float(cfg.P0_scale) * np.eye(n, dtype=float)
+
+    Qw = (float(cfg.sigma_w) ** 2) * np.eye(n, dtype=float)
+    Rv = (float(cfg.sigma_v) ** 2) * np.eye(p, dtype=float)
 
     # logs
     x_norm = np.zeros(cfg.T_steps)
@@ -100,35 +78,32 @@ def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None
     innovation_norm = np.zeros(cfg.T_steps)       # ||y - C x_hat^-||
     tx_attempt = np.zeros(cfg.T_steps, dtype=int)
     tx_deliv = np.zeros(cfg.T_steps, dtype=int)
+    P_trace = np.zeros(cfg.T_steps)
 
-    J = 0.0
+    Jx = 0.0
+    Eu = 0.0
 
     for k in range(cfg.T_steps):
-        # --- plant update (paper: bounded disturbance) ---
-        if cfg.mode == "theory":
-            w = _bounded_vec(rng, cfg.w_bar, n)
-        else:
-            # robust mode can still use bounded disturbances; keep it bounded for paper consistency
-            w = _bounded_vec(rng, max(cfg.w_bar, 0.0), n)
+        # --- plant update (process noise) ---
+        w = _gaussian_noise(rng, cfg.sigma_w, n)
         x = A @ x + B @ u_prev + w
 
-        # --- measurement (paper: y = Cx + v, bounded noise) ---
-        if cfg.mode == "theory":
-            v = _bounded_vec(rng, cfg.v_bar, p)
-        else:
-            v = _bounded_vec(rng, max(cfg.v_bar, 0.0), p)
+        # --- measurement (paper: y = Cx + v) ---
+        v = _gaussian_noise(rng, cfg.sigma_v, p)
         y = (C @ x) + v
 
         # --- remote prediction at controller ---
         x_hat_pred = A_hat @ x_hat + B @ u_prev
+        P_pred = A_hat @ P @ A_hat.T + Qw
 
         # innovation used for triggering (paper eq. (trigger))
         innovation = y - (C @ x_hat_pred)
         innovation_norm[k] = norm2(innovation)
+        trace_pred = float(np.trace(P_pred))
 
         # decide whether to transmit
         if policy == "ET":
-            do_tx = innovation_norm[k] > float(cfg.delta)
+            do_tx = trace_pred > float(cfg.delta)
         elif policy == "PER":
             do_tx = (k % max(int(cfg.period_M), 1) == 0)
         elif policy == "RAND":
@@ -150,17 +125,25 @@ def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None
                     y_rx = y
 
                 innovation_rx = y_rx - (C @ x_hat_pred)
-                x_hat = x_hat_pred + (L @ innovation_rx)
+                S = C @ P_pred @ C.T + Rv
+                Kk = P_pred @ C.T @ np.linalg.pinv(S)
+                x_hat = x_hat_pred + (Kk @ innovation_rx)
+                P = (np.eye(n) - Kk @ C) @ P_pred
             else:
                 x_hat = x_hat_pred
+                P = P_pred
         else:
             x_hat = x_hat_pred
+            P = P_pred
+
+        P_trace[k] = float(np.trace(P))
 
         # control uses remote estimate only (paper eq. (control))
         u = -(K @ x_hat).reshape(-1)
 
         # instantaneous LQR cost (paper simulation setup)
-        J += float(x.T @ Q @ x + u.T @ R @ u)
+        Jx += float(x.T @ Q @ x)
+        Eu += float(u.T @ R @ u)
 
         # prediction error (paper eq. (tilde))
         tilde_x = x - x_hat
@@ -176,12 +159,15 @@ def simulate(cfg: SimConfig, policy: str = "ET", rng: np.random.Generator | None
     bits_deliv = N_deliv * n * int(cfg.bits_per_value)
 
     return dict(
-        J=J,
+        J=Jx + Eu,
+        Jx=Jx,
+        Eu=Eu,
         x_norm=x_norm,
         tilde_x_norm=tilde_x_norm,
         innovation_norm=innovation_norm,
         tx_attempt=tx_attempt,
         tx_deliv=tx_deliv,
+        P_trace=P_trace,
         N_attempt=N_attempt,
         N_deliv=N_deliv,
         bits_attempt=bits_attempt,
@@ -201,7 +187,9 @@ def monte_carlo(
     Returns a list of dicts, one per sweep point, matching the plotting helpers in experiments.py.
     Each dict contains:
       - param: sweep value (delta / period / p)
-      - J: array of costs over MC runs
+      - J: array of total LQR costs over MC runs
+      - Jx: array of state-regulation costs over MC runs
+      - Eu: array of control-energy costs over MC runs
       - N_deliv: array of delivered packet counts over MC runs
       - bits_deliv: array of delivered bits over MC runs (auxiliary)
       - N_attempt / bits_attempt also included for completeness
@@ -214,13 +202,15 @@ def monte_carlo(
     if policy == "ET":
         assert deltas is not None
         for d in deltas:
-            Js, Nd, Bd, Na, Ba = [], [], [], [], []
+            Js, Jx, Eu, Nd, Bd, Na, Ba = [], [], [], [], [], [], []
             for s in seeds:
                 rng = np.random.default_rng(int(s))
                 cfg2 = SimConfig(**cfg.__dict__)
                 cfg2.delta = float(d)
                 out = simulate(cfg2, "ET", rng=rng)
                 Js.append(out["J"])
+                Jx.append(out["Jx"])
+                Eu.append(out["Eu"])
                 Nd.append(out["N_deliv"])
                 Bd.append(out["bits_deliv"])
                 Na.append(out["N_attempt"])
@@ -229,6 +219,8 @@ def monte_carlo(
                 dict(
                     param=float(d),
                     J=np.asarray(Js, dtype=float),
+                    Jx=np.asarray(Jx, dtype=float),
+                    Eu=np.asarray(Eu, dtype=float),
                     N_deliv=np.asarray(Nd, dtype=float),
                     bits_deliv=np.asarray(Bd, dtype=float),
                     N_attempt=np.asarray(Na, dtype=float),
@@ -239,13 +231,15 @@ def monte_carlo(
     elif policy == "PER":
         assert periods is not None
         for M in periods:
-            Js, Nd, Bd, Na, Ba = [], [], [], [], []
+            Js, Jx, Eu, Nd, Bd, Na, Ba = [], [], [], [], [], [], []
             for s in seeds:
                 rng = np.random.default_rng(int(s))
                 cfg2 = SimConfig(**cfg.__dict__)
                 cfg2.period_M = int(M)
                 out = simulate(cfg2, "PER", rng=rng)
                 Js.append(out["J"])
+                Jx.append(out["Jx"])
+                Eu.append(out["Eu"])
                 Nd.append(out["N_deliv"])
                 Bd.append(out["bits_deliv"])
                 Na.append(out["N_attempt"])
@@ -254,6 +248,8 @@ def monte_carlo(
                 dict(
                     param=int(M),
                     J=np.asarray(Js, dtype=float),
+                    Jx=np.asarray(Jx, dtype=float),
+                    Eu=np.asarray(Eu, dtype=float),
                     N_deliv=np.asarray(Nd, dtype=float),
                     bits_deliv=np.asarray(Bd, dtype=float),
                     N_attempt=np.asarray(Na, dtype=float),
@@ -264,13 +260,15 @@ def monte_carlo(
     elif policy == "RAND":
         assert random_ps is not None
         for p in random_ps:
-            Js, Nd, Bd, Na, Ba = [], [], [], [], []
+            Js, Jx, Eu, Nd, Bd, Na, Ba = [], [], [], [], [], [], []
             for s in seeds:
                 rng = np.random.default_rng(int(s))
                 cfg2 = SimConfig(**cfg.__dict__)
                 cfg2.random_p = float(p)
                 out = simulate(cfg2, "RAND", rng=rng)
                 Js.append(out["J"])
+                Jx.append(out["Jx"])
+                Eu.append(out["Eu"])
                 Nd.append(out["N_deliv"])
                 Bd.append(out["bits_deliv"])
                 Na.append(out["N_attempt"])
@@ -279,6 +277,8 @@ def monte_carlo(
                 dict(
                     param=float(p),
                     J=np.asarray(Js, dtype=float),
+                    Jx=np.asarray(Jx, dtype=float),
+                    Eu=np.asarray(Eu, dtype=float),
                     N_deliv=np.asarray(Nd, dtype=float),
                     bits_deliv=np.asarray(Bd, dtype=float),
                     N_attempt=np.asarray(Na, dtype=float),
